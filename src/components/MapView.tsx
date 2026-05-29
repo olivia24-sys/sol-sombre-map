@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Clock, Pencil, X, ExternalLink, Sun, TreePine } from "lucide-react";
+import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Plus, Minus, LocateFixed, Loader2 } from "lucide-react";
 
 type Terrace = {
   id: string;
@@ -28,6 +28,9 @@ const TERRACES: Terrace[] = [
   { id: "14", name: "Bormuth", address: "Carrer del Rec, 31", x: 62, y: 46, sun: true },
 ];
 
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+
 function formatWhen(d: Date) {
   const isToday = new Date().toDateString() === d.toDateString();
   const time = d.toTimeString().slice(0, 5);
@@ -43,23 +46,138 @@ type Props = {
 
 export function MapView({ when, onEdit }: Props) {
   const [selected, setSelected] = useState<Terrace | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [origin, setOrigin] = useState({ x: 50, y: 50 });
+  const [userPos, setUserPos] = useState<{ x: number; y: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+
+  const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
+  // Scroll wheel zoom (desktop)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const ox = ((e.clientX - rect.left) / rect.width) * 100;
+      const oy = ((e.clientY - rect.top) / rect.height) * 100;
+      setOrigin({ x: ox, y: oy });
+      setZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.12 : 0.89)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Pinch zoom (mobile)
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchRef.current = { dist: Math.hypot(dx, dy), zoom };
+      const el = containerRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        setOrigin({ x: ((cx - rect.left) / rect.width) * 100, y: ((cy - rect.top) / rect.height) * 100 });
+      }
+    }
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && pinchRef.current) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      setZoom(clampZoom(pinchRef.current.zoom * (dist / pinchRef.current.dist)));
+    }
+  };
+  const onTouchEnd = () => { pinchRef.current = null; };
+
+  const zoomIn = () => { setOrigin({ x: 50, y: 50 }); setZoom((z) => clampZoom(z * 1.3)); };
+  const zoomOut = () => { setOrigin({ x: 50, y: 50 }); setZoom((z) => clampZoom(z / 1.3)); };
+
+  const handleGeolocate = () => {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        // Mock map: drop a marker near center and zoom in
+        const pos = { x: 50, y: 50 };
+        setUserPos(pos);
+        setOrigin(pos);
+        setZoom(2.2);
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   return (
     <section className="relative w-full h-screen overflow-hidden bg-muted">
-      {/* Mock map */}
-      <div className="absolute inset-0 mock-map" />
-      {/* Subtle streets overlay */}
-      <svg className="absolute inset-0 w-full h-full opacity-50" preserveAspectRatio="none" viewBox="0 0 100 100">
-        <g stroke="#a89e88" strokeWidth="0.3" fill="none">
-          <path d="M0,30 L100,25" />
-          <path d="M0,55 L100,60" />
-          <path d="M0,80 L100,78" />
-          <path d="M25,0 L30,100" />
-          <path d="M55,0 L52,100" />
-          <path d="M78,0 L80,100" />
-          <path d="M10,10 L90,90" strokeWidth="0.2" />
-        </g>
-      </svg>
+      {/* Zoomable map layer */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0 touch-none"
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <div
+          className="absolute inset-0 transition-transform duration-150 ease-out"
+          style={{ transform: `scale(${zoom})`, transformOrigin: `${origin.x}% ${origin.y}%` }}
+        >
+          {/* Mock map */}
+          <div className="absolute inset-0 mock-map" />
+          {/* Subtle streets overlay */}
+          <svg className="absolute inset-0 w-full h-full opacity-50" preserveAspectRatio="none" viewBox="0 0 100 100">
+            <g stroke="#a89e88" strokeWidth="0.3" fill="none">
+              <path d="M0,30 L100,25" />
+              <path d="M0,55 L100,60" />
+              <path d="M0,80 L100,78" />
+              <path d="M25,0 L30,100" />
+              <path d="M55,0 L52,100" />
+              <path d="M78,0 L80,100" />
+              <path d="M10,10 L90,90" strokeWidth="0.2" />
+            </g>
+          </svg>
+
+          {/* Dots */}
+          {TERRACES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setSelected(t)}
+              aria-label={t.name}
+              className="absolute z-10 -translate-x-1/2 -translate-y-1/2 group"
+              style={{ left: `${t.x}%`, top: `${t.y}%` }}
+            >
+              <span
+                className={`block size-5 sm:size-6 rounded-full ring-4 ring-background shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition-transform group-hover:scale-125 ${
+                  t.sun ? "bg-dot-sun" : "bg-dot-shade"
+                } ${selected?.id === t.id ? "scale-125 ring-foreground" : ""}`}
+              />
+              {t.sun && (
+                <span className="absolute inset-0 rounded-full bg-dot-sun animate-ping opacity-40" />
+              )}
+            </button>
+          ))}
+
+          {/* User location marker */}
+          {userPos && (
+            <div
+              className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
+              style={{ left: `${userPos.x}%`, top: `${userPos.y}%` }}
+              aria-label="Tu ubicación"
+            >
+              <span className="block size-4 rounded-full bg-blue-500 ring-4 ring-background shadow-[0_2px_6px_rgba(0,0,0,0.35)]" />
+              <span className="absolute inset-0 rounded-full bg-blue-500 animate-ping opacity-40" />
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Time pill */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 md:left-6 md:translate-x-0">
@@ -81,25 +199,39 @@ export function MapView({ when, onEdit }: Props) {
         <span className="flex items-center gap-2"><span className="size-3 rounded-full bg-dot-shade ring-2 ring-foreground/10" /> Sombra</span>
       </div>
 
-      {/* Dots */}
-      {TERRACES.map((t) => (
+      {/* Map controls (bottom-right) */}
+      <div className="absolute bottom-6 right-4 z-20 flex flex-col gap-2 items-end">
+        <div className="flex flex-col rounded-full bg-background shadow-lg overflow-hidden">
+          <button
+            onClick={zoomIn}
+            aria-label="Acercar"
+            className="grid place-items-center size-11 hover:bg-muted transition-colors"
+          >
+            <Plus className="size-5" />
+          </button>
+          <div className="h-px bg-border" />
+          <button
+            onClick={zoomOut}
+            aria-label="Alejar"
+            className="grid place-items-center size-11 hover:bg-muted transition-colors"
+          >
+            <Minus className="size-5" />
+          </button>
+        </div>
         <button
-          key={t.id}
-          onClick={() => setSelected(t)}
-          aria-label={t.name}
-          className="absolute z-10 -translate-x-1/2 -translate-y-1/2 group"
-          style={{ left: `${t.x}%`, top: `${t.y}%` }}
+          onClick={handleGeolocate}
+          aria-label="Mi ubicación"
+          disabled={locating}
+          className="grid place-items-center size-12 rounded-full bg-background shadow-lg hover:bg-muted transition-colors disabled:opacity-70"
         >
-          <span
-            className={`block size-5 sm:size-6 rounded-full ring-4 ring-background shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition-transform group-hover:scale-125 ${
-              t.sun ? "bg-dot-sun" : "bg-dot-shade"
-            } ${selected?.id === t.id ? "scale-125 ring-foreground" : ""}`}
-          />
-          {t.sun && (
-            <span className="absolute inset-0 rounded-full bg-dot-sun animate-ping opacity-40" />
-          )}
+          {locating ? <Loader2 className="size-5 animate-spin" /> : <LocateFixed className="size-5" />}
         </button>
-      ))}
+        {locating && (
+          <span className="rounded-full bg-foreground text-background text-xs font-display font-semibold px-3 py-1.5 shadow-lg whitespace-nowrap">
+            Buscando tu ubicación...
+          </span>
+        )}
+      </div>
 
       {/* Bottom sheet */}
       <AnimatePresence>
@@ -143,7 +275,7 @@ export function MapView({ when, onEdit }: Props) {
               rel="noreferrer"
               className="mt-4 inline-flex items-center gap-1.5 font-display font-semibold text-terracotta hover:text-coral"
             >
-              Como llegar
+              ¿Cómo llegar?
               <ExternalLink className="size-4" />
             </a>
           </motion.div>
