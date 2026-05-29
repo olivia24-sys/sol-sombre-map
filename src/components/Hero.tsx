@@ -32,7 +32,14 @@ type AnimatedDrinkProps = {
   children?: ReactNode;
 };
 
-function AnimatedDrink({ src, alt, fill, positionStyle, className = "", children }: AnimatedDrinkProps) {
+function AnimatedDrink({
+  src,
+  alt,
+  fill,
+  positionStyle,
+  className = "",
+  children,
+}: AnimatedDrinkProps) {
   const fillClip = useTransform(fill, (value) => `inset(${Math.max(0, 100 - value * 100)}% 0 0 0)`);
 
   return (
@@ -185,7 +192,9 @@ export function Hero({ onSubmit }: Props) {
 
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
           <span>Scroll</span>
-          <span aria-hidden className="animate-bounce">↓</span>
+          <span aria-hidden className="animate-bounce">
+            ↓
+          </span>
         </div>
       </section>
 
