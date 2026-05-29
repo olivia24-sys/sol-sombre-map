@@ -86,7 +86,9 @@ export function Hero({ onSubmit }: Props) {
         {/* Scroll hint */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
           <span>Scroll</span>
-          <span aria-hidden className="animate-bounce">↓</span>
+          <span aria-hidden className="animate-bounce">
+            ↓
+          </span>
         </div>
       </section>
 
