@@ -265,6 +265,11 @@ export function MapView({ when, onEdit }: Props) {
                 <X className="size-4" />
               </button>
             </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {selected.sun
+                ? "Sol hasta las 19:45 · 2h 28min más"
+                : "Sombra hasta las 20:00 · 43min más"}
+            </p>
             <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{selected.name}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{selected.address}</p>
             <a
