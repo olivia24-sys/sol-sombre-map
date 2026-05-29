@@ -91,7 +91,7 @@ export function Hero({ onSubmit }: Props) {
       </section>
 
       {/* SECTION 2 — CTAs with four-drink row at bottom */}
-      <section className="relative min-h-screen w-full flex flex-col items-center px-5 pt-12 pb-8">
+      <section className="relative min-h-screen w-full flex flex-col items-center justify-center px-5 py-12 gap-12">
         <div className="relative z-10 w-full max-w-[420px]">
 
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
