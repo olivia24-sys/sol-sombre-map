@@ -90,19 +90,10 @@ export function Hero({ onSubmit }: Props) {
         </div>
       </section>
 
-      {/* SECTION 2 — CTAs with four-drink row header */}
-      <section className="relative min-h-screen w-full flex flex-col items-center px-5 pb-12 pt-12">
-        <motion.div
-          {...fadeUp}
-          className="flex items-end justify-center gap-4 sm:gap-6 mb-10"
-        >
-          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={canya} alt="Caña de cerveza Estrella" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={vermut} alt="Copa de vermut" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-        </motion.div>
-
+      {/* SECTION 2 — CTAs with four-drink row at bottom */}
+      <section className="relative min-h-screen w-full flex flex-col items-center px-5 pt-12 pb-8">
         <div className="relative z-10 w-full max-w-[420px]">
+
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
             ¿Cuándo buscas <span className="text-terracotta">sol</span>?
           </h2>
