@@ -49,59 +49,40 @@ export function Hero({ onSubmit }: Props) {
   const sunRotate = useTransform(scrollYProgress, [0, 1], [0, 180]);
 
   return (
-    <div ref={wrapperRef} className="relative bg-sun text-foreground">
+    <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
+      {/* ===== Floating illustrations — live above both sections so they
+              remain visible as the user scrolls from section 1 to 2. ===== */}
+      <motion.img
+        src={sun}
+        alt=""
+        aria-hidden
+        style={{ x: sunX, y: sunArcY, rotate: sunRotate }}
+        className="pointer-events-none fixed top-[8%] left-[4%] w-20 sm:w-24 md:w-28 z-20"
+      />
+      <motion.img
+        src={vermut}
+        alt=""
+        aria-hidden
+        style={{ y: dropY, x: vermutX, rotate: vermutRotate, transformOrigin: "30% 90%" }}
+        className="pointer-events-none absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 z-20"
+      />
+      <motion.img
+        src={bottle}
+        alt="Botella de Vichy Catalán"
+        style={{ y: dropY, x: bottleX, rotate: bottleRotate, transformOrigin: "70% 90%" }}
+        className="pointer-events-none absolute top-[50vh] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-20"
+      />
+      <motion.img
+        src={canya}
+        alt="Caña de cerveza Estrella"
+        style={{ y: dropY, x: canyaX, rotate: canyaRotate, transformOrigin: "30% 90%" }}
+        className="pointer-events-none absolute top-[62vh] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-20"
+      />
+
       {/* ============ SECTION 1 — above the fold ============ */}
-      <section className="relative h-screen w-full overflow-hidden">
-        {/* Sun — top-left, arcs across the sky as user scrolls */}
-        <motion.img
-          src={sun}
-          alt=""
-          aria-hidden
-          style={{ x: sunX, y: sunArcY, rotate: sunRotate }}
-          className="pointer-events-none absolute top-[8%] left-[4%] w-20 sm:w-24 md:w-28 z-20"
-        />
-
-        {/* Vermouth — top right, scroll-tilts as if pouring */}
-        <motion.img
-          src={vermut}
-          alt=""
-          aria-hidden
-          style={{
-            y: dropY,
-            x: vermutX,
-            rotate: vermutRotate,
-            transformOrigin: "30% 90%",
-          }}
-          className="pointer-events-none absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 z-20"
-        />
-
-        {/* Bottle — bottom left, scroll-tilts toward the centre */}
-        <motion.img
-          src={bottle}
-          alt="Botella de Vichy Catalán"
-          style={{
-            y: dropY,
-            x: bottleX,
-            rotate: bottleRotate,
-            transformOrigin: "70% 90%",
-          }}
-          className="pointer-events-none absolute bottom-[8%] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-20"
-        />
-
-        {/* Estrella caña — bottom right, scroll-tilts toward the centre */}
-        <motion.img
-          src={canya}
-          alt="Caña de cerveza Estrella"
-          style={{
-            y: dropY,
-            x: canyaX,
-            rotate: canyaRotate,
-            transformOrigin: "30% 90%",
-          }}
-          className="pointer-events-none absolute bottom-[10%] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-20"
-        />
-
+      <section className="relative h-screen w-full">
         {/* Title block */}
+
         <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
           <h1 className="font-display font-bold leading-[0.9] text-foreground text-[22vw] sm:text-8xl md:text-9xl">
             ¿Hay <span className="text-terracotta">Sol</span>?
