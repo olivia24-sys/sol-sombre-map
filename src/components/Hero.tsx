@@ -31,52 +31,52 @@ export function Hero({ onSubmit }: Props) {
   // travel from section 1 into section 2.
   const dropY = useTransform(scrollYProgress, [0, 1], ["0vh", "95vh"]);
 
-  // Vichy bottle — pours to the right
-  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.6], [-6, 70]);
-  const bottleX = useTransform(scrollYProgress, [0.05, 0.6], [0, 60]);
+  // Vichy bottle — pours and lands bottom-left (stays in left 25%)
+  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.6], [-6, -35]);
+  const bottleX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "-2vw"]);
 
-  // Estrella caña — tilts toward centre as if catching the pour
-  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -45]);
-  const canyaX = useTransform(scrollYProgress, [0.05, 0.6], [0, -40]);
+  // Estrella caña — tips and lands bottom-right (stays in right 25%)
+  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, 30]);
+  const canyaX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "2vw"]);
 
-  // Vermut — also pours, tilts opposite
-  const vermutRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -55]);
-  const vermutX = useTransform(scrollYProgress, [0.05, 0.6], [0, -30]);
+  // Vermut — drifts to upper-right corner
+  const vermutRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -20]);
+  const vermutX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "2vw"]);
 
-  // Sun — arcs across the sky: rises to a peak then sets on the far side
-  const sunX = useTransform(scrollYProgress, [0, 0.5, 1], ["0vw", "40vw", "78vw"]);
-  const sunArcY = useTransform(scrollYProgress, [0, 0.5, 1], ["0vh", "-8vh", "20vh"]);
-  const sunRotate = useTransform(scrollYProgress, [0, 1], [0, 180]);
+  // Sun — drifts to upper-left corner only (no rightward movement)
+  const sunX = useTransform(scrollYProgress, [0, 1], ["0vw", "-2vw"]);
+  const sunArcY = useTransform(scrollYProgress, [0, 1], ["0vh", "-2vh"]);
+  const sunRotate = useTransform(scrollYProgress, [0, 1], [0, 90]);
 
   return (
     <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
-      {/* ===== Floating illustrations — live above both sections so they
-              remain visible as the user scrolls from section 1 to 2. ===== */}
+      {/* ===== Floating illustrations — frame the CTA from the edges.
+              All are pointer-events-none and sit below the CTA z-index. ===== */}
       <motion.img
         src={sun}
         alt=""
         aria-hidden
         style={{ x: sunX, y: sunArcY, rotate: sunRotate }}
-        className="pointer-events-none fixed top-[8%] left-[4%] w-20 sm:w-24 md:w-28 z-20"
+        className="pointer-events-none fixed top-[6%] left-[3%] w-20 sm:w-24 md:w-28 z-0"
       />
       <motion.img
         src={vermut}
         alt=""
         aria-hidden
         style={{ y: dropY, x: vermutX, rotate: vermutRotate, transformOrigin: "30% 90%" }}
-        className="pointer-events-none absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 z-20"
+        className="pointer-events-none absolute top-[8%] right-[4%] w-20 sm:w-28 md:w-32 z-0"
       />
       <motion.img
         src={bottle}
         alt="Botella de Vichy Catalán"
         style={{ y: dropY, x: bottleX, rotate: bottleRotate, transformOrigin: "70% 90%" }}
-        className="pointer-events-none absolute top-[50vh] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-20"
+        className="pointer-events-none absolute top-[50vh] left-[1%] sm:left-[2%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-0"
       />
       <motion.img
         src={canya}
         alt="Caña de cerveza Estrella"
         style={{ y: dropY, x: canyaX, rotate: canyaRotate, transformOrigin: "30% 90%" }}
-        className="pointer-events-none absolute top-[62vh] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-20"
+        className="pointer-events-none absolute top-[62vh] right-[1%] sm:right-[3%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-0"
       />
 
       {/* ============ SECTION 1 — above the fold ============ */}
@@ -101,7 +101,8 @@ export function Hero({ onSubmit }: Props) {
 
       {/* ============ SECTION 2 — revealed on scroll ============ */}
       <section className="relative min-h-screen w-full flex items-center justify-center px-5 py-12">
-        <div className="relative z-10 w-full max-w-md">
+        <div className="relative z-10 w-full max-w-[420px]">
+
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
             ¿Cuándo buscas <span className="text-terracotta">sol</span>?
           </h2>
