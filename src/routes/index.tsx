@@ -1,29 +1,52 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
+import { Hero } from "@/components/Hero";
+import { MapView } from "@/components/MapView";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Your App" },
-      { name: "description", content: "Replace this with a one-sentence description of your app." },
-      { property: "og:title", content: "Your App" },
-      { property: "og:description", content: "Replace this with a one-sentence description of your app." },
+      { title: "¿Hay Sol? — Encuentra tu terraza al sol en Barcelona" },
+      {
+        name: "description",
+        content:
+          "Mira qué terrazas de Barcelona estarán al sol o a la sombra a la hora que elijas. Hecho con amor en Barcelona.",
+      },
+      { property: "og:title", content: "¿Hay Sol?" },
+      {
+        property: "og:description",
+        content: "Encuentra tu terraza al sol o a la sombra en Barcelona.",
+      },
     ],
   }),
   component: Index,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
 function Index() {
+  const [when, setWhen] = useState<Date | null>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const heroRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (when && mapRef.current) {
+      mapRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [when]);
+
+  const handleEdit = () => {
+    heroRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
+    <main>
+      <div ref={heroRef}>
+        <Hero onSubmit={(d) => setWhen(d)} />
+      </div>
+      {when && (
+        <div ref={mapRef}>
+          <MapView when={when} onEdit={handleEdit} />
+        </div>
+      )}
+    </main>
   );
 }
