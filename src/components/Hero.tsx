@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Calendar, Clock } from "lucide-react";
-import { motion, useScroll, useTransform } from "motion/react";
+import { motion, type MotionValue, useScroll, useTransform } from "motion/react";
 import bottle from "@/assets/bottle.png";
 import canya from "@/assets/canya.png";
 import vermut from "@/assets/vermut.png";
@@ -17,6 +17,82 @@ function nowStr() {
   return new Date().toTimeString().slice(0, 5);
 }
 
+type DrinkStyle = {
+  left: MotionValue<string>;
+  top: MotionValue<string>;
+  rotate: MotionValue<number>;
+};
+
+type AnimatedDrinkProps = {
+  src: string;
+  alt: string;
+  fill: MotionValue<number>;
+  positionStyle: DrinkStyle;
+  className?: string;
+  children?: ReactNode;
+};
+
+function AnimatedDrink({
+  src,
+  alt,
+  fill,
+  positionStyle,
+  className = "",
+  children,
+}: AnimatedDrinkProps) {
+  const fillClip = useTransform(fill, (value) => `inset(${Math.max(0, 100 - value * 100)}% 0 0 0)`);
+
+  return (
+    <motion.div
+      style={positionStyle}
+      className={`fixed z-[1] pointer-events-none -translate-x-1/2 -translate-y-1/2 ${className}`}
+    >
+      <img
+        src={src}
+        alt={alt}
+        className="absolute inset-0 h-full w-full object-contain opacity-35 grayscale saturate-0 brightness-125 contrast-75"
+      />
+      <motion.div className="absolute inset-0 overflow-hidden" style={{ clipPath: fillClip }}>
+        <img src={src} alt="" aria-hidden className="h-full w-full object-contain" />
+      </motion.div>
+      {children}
+    </motion.div>
+  );
+}
+
+function VermouthAddIns({ fill }: { fill: MotionValue<number> }) {
+  const iceOpacity = useTransform(fill, [0.15, 0.28], [0, 1]);
+  const iceOneY = useTransform(fill, [0.15, 0.45], [-92, 2]);
+  const iceTwoY = useTransform(fill, [0.22, 0.52], [-112, 7]);
+  const orangeOpacity = useTransform(fill, [0.42, 0.58], [0, 1]);
+  const orangeY = useTransform(fill, [0.42, 0.64], [-86, 0]);
+  const oliveOpacity = useTransform(fill, [0.62, 0.78], [0, 1]);
+  const oliveY = useTransform(fill, [0.62, 0.88], [-104, 0]);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      <motion.span
+        style={{ opacity: iceOpacity, y: iceOneY, rotate: 18 }}
+        className="absolute left-[41%] top-[48%] h-4 w-4 rounded-sm border border-background/80 bg-background/50 backdrop-blur-[1px]"
+      />
+      <motion.span
+        style={{ opacity: iceOpacity, y: iceTwoY, rotate: -24 }}
+        className="absolute left-[53%] top-[51%] h-5 w-5 rounded-sm border border-background/80 bg-background/45 backdrop-blur-[1px]"
+      />
+      <motion.span
+        style={{ opacity: orangeOpacity, y: orangeY, rotate: -18 }}
+        className="absolute left-[56%] top-[42%] h-8 w-8 rounded-full border-[5px] border-terracotta bg-sun"
+      />
+      <motion.span
+        style={{ opacity: oliveOpacity, y: oliveY, rotate: -28 }}
+        className="absolute left-[34%] top-[35%] h-[74px] w-[3px] origin-bottom rounded-full bg-foreground/80"
+      >
+        <span className="absolute -left-[7px] top-2 h-4 w-4 rounded-full bg-dot-shade ring-2 ring-background/70" />
+      </motion.span>
+    </div>
+  );
+}
+
 export function Hero({ onSubmit }: Props) {
   const [date, setDate] = useState(todayStr());
   const [time, setTime] = useState(nowStr());
@@ -27,18 +103,20 @@ export function Hero({ onSubmit }: Props) {
     offset: ["start start", "end end"],
   });
 
-  // Glasses arc from mid-left to mid-right as the user scrolls.
-  const canyaX = useTransform(scrollYProgress, [0, 1], ["6vw", "62vw"]);
-  const canyaY = useTransform(scrollYProgress, [0, 0.5, 1], ["48vh", "18vh", "52vh"]);
-  const canyaRotate = useTransform(scrollYProgress, [0, 1], [-12, 22]);
+  const glassFill = useTransform(scrollYProgress, [0.06, 0.96], [0, 1]);
 
-  const vermutX = useTransform(scrollYProgress, [0, 1], ["18vw", "78vw"]);
-  const vermutY = useTransform(scrollYProgress, [0, 0.5, 1], ["55vh", "26vh", "46vh"]);
-  const vermutRotate = useTransform(scrollYProgress, [0, 1], [10, -18]);
+  // One pair of glasses: empty below the title, then filled and parked as section 2's header.
+  const canyaX = useTransform(scrollYProgress, [0, 1], ["44vw", "47vw"]);
+  const canyaY = useTransform(scrollYProgress, [0, 1], ["68vh", "14vh"]);
+  const canyaRotate = useTransform(scrollYProgress, [0, 1], [0, -4]);
 
-  // Vichy bottles slide in from the left and right edges near the end.
-  const bottleLeftX = useTransform(scrollYProgress, [0.65, 0.92], ["-45vw", "0vw"]);
-  const bottleRightX = useTransform(scrollYProgress, [0.65, 0.92], ["45vw", "0vw"]);
+  const vermutX = useTransform(scrollYProgress, [0, 1], ["56vw", "53vw"]);
+  const vermutY = useTransform(scrollYProgress, [0, 1], ["68vh", "14vh"]);
+  const vermutRotate = useTransform(scrollYProgress, [0, 1], [0, 4]);
+
+  // Vichy bottles slide in from the left and right edges to complete the header row.
+  const bottleLeftX = useTransform(scrollYProgress, [0.62, 1], ["-58vw", "0vw"]);
+  const bottleRightX = useTransform(scrollYProgress, [0.62, 1], ["58vw", "0vw"]);
 
   return (
     <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
@@ -69,37 +147,41 @@ export function Hero({ onSubmit }: Props) {
         />
       </motion.div>
 
-      {/* Glasses arcing across the screen with scroll */}
-      <motion.img
+      {/* One animated drink pair, filling while the page scrolls normally */}
+      <AnimatedDrink
         src={canya}
         alt="Caña de cerveza Estrella"
-        style={{ left: canyaX, top: canyaY, rotate: canyaRotate }}
-        className="fixed z-0 pointer-events-none w-24 sm:w-28 md:w-32 -translate-x-1/2 -translate-y-1/2"
+        fill={glassFill}
+        positionStyle={{ left: canyaX, top: canyaY, rotate: canyaRotate }}
+        className="h-24 w-24 sm:h-28 sm:w-28 md:h-32 md:w-32"
       />
-      <motion.img
+      <AnimatedDrink
         src={vermut}
         alt="Copa de vermut"
-        style={{ left: vermutX, top: vermutY, rotate: vermutRotate }}
-        className="fixed z-0 pointer-events-none w-24 sm:w-28 md:w-32 -translate-x-1/2 -translate-y-1/2"
-      />
+        fill={glassFill}
+        positionStyle={{ left: vermutX, top: vermutY, rotate: vermutRotate }}
+        className="h-24 w-24 sm:h-28 sm:w-28 md:h-32 md:w-32"
+      >
+        <VermouthAddIns fill={glassFill} />
+      </AnimatedDrink>
 
       {/* Vichy bottles slide in from left/right edges */}
       <motion.img
         src={bottle}
         alt="Botella de Vichy Catalán"
         style={{ x: bottleLeftX }}
-        className="fixed z-0 pointer-events-none left-0 top-1/2 -translate-y-1/2 h-40 sm:h-48 md:h-56 w-auto"
+        className="fixed z-[1] pointer-events-none left-[32vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[40vw] sm:h-28 sm:w-28 md:left-[42vw] md:h-32 md:w-32"
       />
       <motion.img
         src={bottle}
         alt="Botella de Vichy Catalán"
         style={{ x: bottleRightX }}
-        className="fixed z-0 pointer-events-none right-0 top-1/2 -translate-y-1/2 h-40 sm:h-48 md:h-56 w-auto"
+        className="fixed z-[1] pointer-events-none left-[68vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[60vw] sm:h-28 sm:w-28 md:left-[58vw] md:h-32 md:w-32"
       />
 
       {/* SECTION 1 — title above the fold */}
       <section className="relative h-screen w-full">
-        <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
+        <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 pb-40 text-center sm:pb-44">
           <h1 className="font-display font-bold leading-[0.9] text-foreground text-[20vw] sm:text-8xl md:text-9xl">
             ¿Hay <span className="text-terracotta">Sol</span>?
           </h1>
@@ -110,12 +192,14 @@ export function Hero({ onSubmit }: Props) {
 
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
           <span>Scroll</span>
-          <span aria-hidden className="animate-bounce">↓</span>
+          <span aria-hidden className="animate-bounce">
+            ↓
+          </span>
         </div>
       </section>
 
       {/* SECTION 2 — CTAs */}
-      <section className="relative min-h-screen w-full flex items-center justify-center px-5 py-12">
+      <section className="relative min-h-screen w-full flex items-start justify-center px-5 pb-12 pt-56 sm:pt-60">
         <div className="relative z-10 w-full max-w-[420px]">
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
             ¿Cuándo buscas <span className="text-terracotta">sol</span>?
