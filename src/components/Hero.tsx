@@ -33,7 +33,7 @@ export function Hero({ onSubmit }: Props) {
     <div ref={heroRef} className="relative bg-sun text-foreground overflow-hidden">
       {/* SECTION 1 — hero */}
       <section className="relative h-screen w-full overflow-hidden">
-        {/* Sun — arcs across the sky on page load, then rests in upper-right */}
+        {/* Sun — arcs across the sky on page load in a half-circle, then rests upper-right */}
         <motion.img
           src={sun}
           alt=""
@@ -42,18 +42,19 @@ export function Hero({ onSubmit }: Props) {
           style={{ marginLeft: "-3rem", marginTop: "-3rem" }}
           initial={{ left: "8vw", top: "78vh", opacity: 0, rotate: 0 }}
           animate={{
-            left: ["8vw", "50vw", "82vw"],
-            top: ["78vh", "8vh", "18vh"],
-            opacity: [0, 1, 1, 1],
+            // Half-circle arc sampled at 9 points (cos/sin from 180° → 0°)
+            left: ["8vw", "13vw", "26vw", "44vw", "50vw", "56vw", "74vw", "85vw", "82vw"],
+            top: ["78vh", "47vh", "22vh", "10vh", "8vh", "10vh", "16vh", "17vh", "18vh"],
+            opacity: [0, 1, 1, 1, 1, 1, 1, 1, 1],
             rotate: 360,
           }}
           transition={{
             duration: 2.5,
             ease: "easeInOut",
-            times: [0, 0.5, 1],
-            opacity: { duration: 0.4, times: [0, 0.2, 0.5, 1] },
+            opacity: { duration: 0.4 },
           }}
         />
+
 
         <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
           <h1 className="font-display font-bold leading-[0.9] text-foreground text-[20vw] sm:text-8xl md:text-9xl">
@@ -89,19 +90,10 @@ export function Hero({ onSubmit }: Props) {
         </div>
       </section>
 
-      {/* SECTION 2 — CTAs with four-drink row header */}
-      <section className="relative min-h-screen w-full flex flex-col items-center px-5 pb-12 pt-12">
-        <motion.div
-          {...fadeUp}
-          className="flex items-end justify-center gap-4 sm:gap-6 mb-10"
-        >
-          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={canya} alt="Caña de cerveza Estrella" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={vermut} alt="Copa de vermut" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
-        </motion.div>
-
+      {/* SECTION 2 — CTAs with four-drink row at bottom */}
+      <section className="relative min-h-screen w-full flex flex-col items-center px-5 pt-12 pb-8">
         <div className="relative z-10 w-full max-w-[420px]">
+
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
             ¿Cuándo buscas <span className="text-terracotta">sol</span>?
           </h2>
@@ -152,7 +144,18 @@ export function Hero({ onSubmit }: Props) {
             </button>
           </div>
         </div>
+
+        <motion.div
+          {...fadeUp}
+          className="mt-auto pt-16 flex items-end justify-center gap-4 sm:gap-6"
+        >
+          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
+          <img src={canya} alt="Caña de cerveza Estrella" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
+          <img src={vermut} alt="Copa de vermut" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
+          <img src={bottle} alt="Botella de Vichy Catalán" className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 object-contain" />
+        </motion.div>
       </section>
+
     </div>
   );
 }
