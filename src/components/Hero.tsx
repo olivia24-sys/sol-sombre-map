@@ -115,8 +115,8 @@ export function Hero({ onSubmit }: Props) {
   const vermutRotate = useTransform(scrollYProgress, [0, 1], [0, 4]);
 
   // Vichy bottles slide in from the left and right edges to complete the header row.
-  const bottleLeftX = useTransform(scrollYProgress, [0.62, 1], ["-72vw", "0vw"]);
-  const bottleRightX = useTransform(scrollYProgress, [0.62, 1], ["72vw", "0vw"]);
+  const bottleLeftX = useTransform(scrollYProgress, [0.62, 1], ["-58vw", "0vw"]);
+  const bottleRightX = useTransform(scrollYProgress, [0.62, 1], ["58vw", "0vw"]);
 
   return (
     <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
@@ -170,13 +170,13 @@ export function Hero({ onSubmit }: Props) {
         src={bottle}
         alt="Botella de Vichy Catalán"
         style={{ x: bottleLeftX }}
-        className="fixed z-[1] pointer-events-none left-[35vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[38vw] sm:h-28 sm:w-28 md:h-32 md:w-32"
+        className="fixed z-[1] pointer-events-none left-[32vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[40vw] sm:h-28 sm:w-28 md:left-[42vw] md:h-32 md:w-32"
       />
       <motion.img
         src={bottle}
         alt="Botella de Vichy Catalán"
         style={{ x: bottleRightX }}
-        className="fixed z-[1] pointer-events-none left-[65vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[62vw] sm:h-28 sm:w-28 md:h-32 md:w-32"
+        className="fixed z-[1] pointer-events-none left-[68vw] top-[14vh] h-24 w-24 -translate-x-1/2 -translate-y-1/2 object-contain sm:left-[60vw] sm:h-28 sm:w-28 md:left-[58vw] md:h-32 md:w-32"
       />
 
       {/* SECTION 1 — title above the fold */}
