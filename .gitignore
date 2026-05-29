@@ -16,6 +16,11 @@ dist-ssr
 .nitro
 *.local
 
+# Local env files (contain the Mapbox token — keep out of git)
+.env
+.env.*
+!.env.example
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars

@@ -1,35 +1,54 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
-import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Plus, Minus, LocateFixed, Loader2 } from "lucide-react";
+import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Moon, Plus, Minus, LocateFixed, Loader2, AlertTriangle } from "lucide-react";
+import type { Map as MapboxMap, Marker as MapboxMarker, GeoJSONSource } from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
+import { fetchTerraces, terracesToGeoJSON, type Terrace, type TerraceState } from "@/lib/terraces";
+import { getSunPosition, getNextSunriseISO } from "@/lib/sun";
+import { fetchBuildings, type BBox, type BuildingFeature } from "@/lib/overpass";
+import type { ShadeResult, DurationResult } from "@/lib/shadow";
 
-type Terrace = {
-  id: string;
-  name: string;
-  address: string;
-  x: number; // %
-  y: number; // %
-  sun: boolean;
-};
+/* ════════════════════════════════════════════════════════════════════════
+ * ¿Hay Sol? — MapView
+ * ────────────────────────────────────────────────────────────────────────
+ * Major systems are marked with banner comments so future steps are easy to
+ * find:
+ *   [MAP CONFIG]      — Barcelona centre, zoom, style, colours, token
+ *   [TERRACE DATA]    — fetched from the open-data feed (src/lib/terraces.ts)
+ *   [SUN POSITION]    — SunCalc day/night + azimuth (src/lib/sun.ts)
+ *   [MAPBOX INIT]     — create the GL map, SSR-safe (client only)
+ *   [TERRACE LAYER]   — GeoJSON source + circle layer + click/hover
+ *   [SHADOW ENGINE]   — Overpass buildings + Web Worker ray-casting (Step 4)
+ *   [DATA SYNC]       — paint dots from day/night + shadow results
+ *   [MAP CONTROLS]    — zoom buttons + geolocate (Step 6)
+ *   [UI CHROME]       — time pill, legend, popup, disclaimer (preserved design)
+ *
+ * Coming next: Step 5 fills the popup duration line.
+ * ════════════════════════════════════════════════════════════════════════ */
 
-const TERRACES: Terrace[] = [
-  { id: "1", name: "Bar Calders", address: "Carrer del Parlament, 25", x: 28, y: 62, sun: true },
-  { id: "2", name: "El Xampanyet", address: "Carrer de Montcada, 22", x: 58, y: 44, sun: false },
-  { id: "3", name: "Quimet & Quimet", address: "Carrer del Poeta Cabanyes, 25", x: 22, y: 74, sun: true },
-  { id: "4", name: "La Vermu", address: "Carrer de Robadors, 12", x: 44, y: 58, sun: true },
-  { id: "5", name: "Bodega 1900", address: "Carrer de Tamarit, 91", x: 18, y: 56, sun: false },
-  { id: "6", name: "Café del Born", address: "Plaça Comercial, 10", x: 64, y: 50, sun: true },
-  { id: "7", name: "Bar Mut", address: "Carrer de Pau Claris, 192", x: 52, y: 28, sun: false },
-  { id: "8", name: "Granja Petitbo", address: "Passeig de Sant Joan, 82", x: 68, y: 32, sun: true },
-  { id: "9", name: "Bar Salvatge", address: "Carrer de Sant Pere Més Alt, 68", x: 56, y: 38, sun: true },
-  { id: "10", name: "El Sortidor", address: "Plaça del Sortidor, 5", x: 30, y: 80, sun: false },
-  { id: "11", name: "La Confitería", address: "Carrer de Sant Pau, 128", x: 36, y: 52, sun: true },
-  { id: "12", name: "Bar del Pla", address: "Carrer de Montcada, 2", x: 60, y: 48, sun: false },
-  { id: "13", name: "Federal Café", address: "Carrer del Parlament, 39", x: 26, y: 66, sun: true },
-  { id: "14", name: "Bormuth", address: "Carrer del Rec, 31", x: 62, y: 46, sun: true },
-];
+/* ═══ [MAP CONFIG] ═══════════════════════════════════════════════════════ */
 
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 4;
+const BCN = { lng: 2.1734, lat: 41.3851 }; // Barcelona centre
+const DEFAULT_ZOOM = 14;
+const MAP_STYLE = "mapbox://styles/mapbox/light-v11"; // clean + minimal
+
+// Dot colours mirror the --dot-sun / --dot-shade design tokens (styles.css).
+const COLOR_SUN = "#FFD700"; // sol     (gold)
+const COLOR_SHADE = "#3DAA6B"; // sombra  (green)
+const COLOR_NIGHT = "#9AA0A6"; // night / unknown / calculating (grey)
+
+// Client-side public token (injected by Vite). See .env / .env.example.
+const TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN ?? "").trim();
+const HAS_TOKEN = TOKEN.startsWith("pk.");
+
+const SOURCE_ID = "terraces";
+const LAYER_ID = "terraces-dots";
+
+// How long to wait after the user stops panning before recalculating.
+const MOVE_DEBOUNCE_MS = 500;
+
+/* ═══ helpers ════════════════════════════════════════════════════════════ */
 
 function formatWhen(d: Date) {
   const isToday = new Date().toDateString() === d.toDateString();
@@ -39,6 +58,32 @@ function formatWhen(d: Date) {
   return `${day.charAt(0).toUpperCase() + day.slice(1)} · ${time}`;
 }
 
+// "2026-05-29T19:45:00" → "19:45"
+function hhmm(iso: string): string {
+  return new Date(iso).toTimeString().slice(0, 5);
+}
+
+// Human countdown between two epoch-ms times, e.g. "2h 15min" or "43min".
+function countdown(fromMs: number, toMs: number): string {
+  const min = Math.max(0, Math.round((toMs - fromMs) / 60_000));
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h}h ${m}min` : `${m}min`;
+}
+
+// Pad a bbox by a fraction on each side (so edge terraces still see buildings).
+function padBBox(b: BBox, frac: number): BBox {
+  const dLat = (b.north - b.south) * frac;
+  const dLng = (b.east - b.west) * frac;
+  return { south: b.south - dLat, west: b.west - dLng, north: b.north + dLat, east: b.east + dLng };
+}
+
+// Is `inner` fully inside `outer`? Used to reuse cached buildings on small moves.
+function bboxContains(outer: BBox | null, inner: BBox): boolean {
+  if (!outer) return false;
+  return outer.south <= inner.south && outer.west <= inner.west && outer.north >= inner.north && outer.east >= inner.east;
+}
+
 type Props = {
   when: Date;
   onEdit: () => void;
@@ -46,69 +91,296 @@ type Props = {
 
 export function MapView({ when, onEdit }: Props) {
   const [selected, setSelected] = useState<Terrace | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [origin, setOrigin] = useState({ x: 50, y: 50 });
-  const [userPos, setUserPos] = useState<{ x: number; y: number } | null>(null);
   const [locating, setLocating] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
-  const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+  // Shadow engine state
+  const [shadeStates, setShadeStates] = useState<ShadeResult>({});
+  const [shadowStatus, setShadowStatus] = useState<"idle" | "loading" | "calculating" | "ready" | "error">("idle");
+  const [durationInfo, setDurationInfo] = useState<DurationResult | null>(null); // Step 5: selected terrace
 
-  // Scroll wheel zoom (desktop)
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const ox = ((e.clientX - rect.left) / rect.width) * 100;
-      const oy = ((e.clientY - rect.top) / rect.height) * 100;
-      setOrigin({ x: ox, y: oy });
-      setZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.12 : 0.89)));
+  // Live refs
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapboxMap | null>(null);
+  const mapboxglRef = useRef<(typeof import("mapbox-gl"))["default"] | null>(null);
+  const userMarkerRef = useRef<MapboxMarker | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const buildingsRef = useRef<BuildingFeature[]>([]);
+  const buildingsBoundsRef = useRef<BBox | null>(null);
+  const latestStatesReqRef = useRef(0); // dedupe Step 4 "states" results
+  const latestDurationReqRef = useRef(0); // dedupe Step 5 "duration" results
+  const moveTimerRef = useRef<number | undefined>(undefined);
+  const recalcRef = useRef<() => void>(() => {});
+
+  /* ═══ [TERRACE DATA] ═══════════════════════════════════════════════════
+   * Fetch the real terraces once (cached by React Query). See lib/terraces.ts.
+   * ──────────────────────────────────────────────────────────────────── */
+  const terracesQuery = useQuery({
+    queryKey: ["terraces"],
+    queryFn: () => fetchTerraces(500),
+    staleTime: Infinity,
+    retry: 1,
+  });
+  const terraces = terracesQuery.data ?? [];
+
+  /* ═══ [SUN POSITION] — Step 3 ══════════════════════════════════════════
+   * Sun altitude/azimuth for Barcelona at the selected time. Night (altitude
+   * ≤ 0) paints every terrace grey; the azimuth feeds the shadow cast below.
+   * ──────────────────────────────────────────────────────────────────── */
+  const sun = useMemo(() => getSunPosition(when), [when]);
+
+  /* ═══ [SHADOW ENGINE] — Step 4 ═════════════════════════════════════════
+   * recalcShadows: fetch buildings for the viewport (cached; refetched only
+   * when the view leaves the cached box) and hand terraces + buildings + sun
+   * to the Web Worker. Kept in a ref so the (once-registered) `moveend`
+   * listener always calls the latest version (current sun/terraces).
+   * ──────────────────────────────────────────────────────────────────── */
+  recalcRef.current = () => {
+    const map = mapRef.current;
+    const worker = workerRef.current;
+    if (!map || !worker || !mapReady) return;
+    if (sun.isNight || terraces.length === 0) return; // night → handled by [DATA SYNC]
+
+    const mb = map.getBounds();
+    if (!mb) return;
+    const view: BBox = { south: mb.getSouth(), west: mb.getWest(), north: mb.getNorth(), east: mb.getEast() };
+
+    const post = (buildings: BuildingFeature[]) => {
+      const requestId = ++latestStatesReqRef.current;
+      setShadowStatus("calculating");
+      worker.postMessage({
+        type: "states",
+        requestId,
+        terraces: terraces.map((t) => ({ id: t.id, lng: t.lng, lat: t.lat })),
+        buildings,
+        sun: { altitudeRad: sun.altitudeRad, bearingFromNorthDeg: sun.bearingFromNorthDeg },
+      });
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+
+    if (bboxContains(buildingsBoundsRef.current, view)) {
+      post(buildingsRef.current); // reuse cache (small pan / time change)
+    } else {
+      const padded = padBBox(view, 0.2);
+      setShadowStatus("loading");
+      fetchBuildings(padded)
+        .then((blds) => {
+          buildingsRef.current = blds;
+          buildingsBoundsRef.current = padded;
+          post(blds);
+        })
+        .catch(() => setShadowStatus("error"));
+    }
+  };
+
+  // Create the worker once (client-only; Vite bundles the worker from the URL).
+  useEffect(() => {
+    const worker = new Worker(new URL("../workers/shadow.worker.ts", import.meta.url), { type: "module" });
+    workerRef.current = worker;
+    worker.onmessage = (e: MessageEvent<{ type: "states" | "duration"; requestId: number; ok: boolean; result?: ShadeResult | DurationResult }>) => {
+      const msg = e.data;
+      if (msg.type === "states") {
+        if (msg.requestId !== latestStatesReqRef.current) return; // ignore stale
+        if (msg.ok && msg.result) {
+          setShadeStates(msg.result as ShadeResult);
+          setShadowStatus("ready");
+        } else {
+          setShadowStatus("error");
+        }
+      } else if (msg.type === "duration") {
+        if (msg.requestId !== latestDurationReqRef.current) return; // ignore stale
+        setDurationInfo(msg.ok && msg.result ? (msg.result as DurationResult) : null);
+      }
+    };
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
   }, []);
 
-  // Pinch zoom (mobile)
-  const onTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      pinchRef.current = { dist: Math.hypot(dx, dy), zoom };
-      const el = containerRef.current;
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        setOrigin({ x: ((cx - rect.left) / rect.width) * 100, y: ((cy - rect.top) / rect.height) * 100 });
-      }
+  // Recompute when the data, map, or time changes. Night clears everything;
+  // otherwise dots go grey ("calculando") until the worker returns.
+  useEffect(() => {
+    if (!mapReady) return;
+    if (sun.isNight) {
+      setShadeStates({});
+      setShadowStatus("idle");
+      return;
     }
-  };
-  const onTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && pinchRef.current) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      const dist = Math.hypot(dx, dy);
-      setZoom(clampZoom(pinchRef.current.zoom * (dist / pinchRef.current.dist)));
-    }
-  };
-  const onTouchEnd = () => { pinchRef.current = null; };
+    setShadeStates({});
+    recalcRef.current();
+  }, [terraces, mapReady, sun]);
 
-  const zoomIn = () => { setOrigin({ x: 50, y: 50 }); setZoom((z) => clampZoom(z * 1.3)); };
-  const zoomOut = () => { setOrigin({ x: 50, y: 50 }); setZoom((z) => clampZoom(z / 1.3)); };
+  // Sunrise time for the night message ("El sol sale a las 07:23").
+  const sunriseISO = useMemo(() => (sun.isNight ? getNextSunriseISO(when) : null), [sun, when]);
+
+  /* ═══ [SUN UNTIL X] — Step 5 ═══════════════════════════════════════════
+   * When a terrace is open in daytime, ask the SAME worker how long its
+   * current sun/shade lasts (15-min steps). Re-runs on time change or after a
+   * fresh shadow result; the worker keeps it off the UI thread.
+   * ──────────────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!selected || sun.isNight) {
+      setDurationInfo(null);
+      return;
+    }
+    const worker = workerRef.current;
+    if (!worker) return;
+    const requestId = ++latestDurationReqRef.current;
+    setDurationInfo(null); // "Calculando…" until it returns
+    worker.postMessage({
+      type: "duration",
+      requestId,
+      terrace: { id: selected.id, lng: selected.lng, lat: selected.lat },
+      buildings: buildingsRef.current,
+      startISO: when.toISOString(),
+    });
+  }, [selected, when, sun, shadeStates]);
+
+  /* ═══ [MAPBOX INIT] ════════════════════════════════════════════════════
+   * Create the GL map once, client-side only. mapbox-gl is dynamically
+   * imported inside the effect so its browser-only code never runs during SSR.
+   * ──────────────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!HAS_TOKEN) return; // no token → show the overlay instead (see render)
+    let cancelled = false;
+
+    (async () => {
+      const mapboxgl = (await import("mapbox-gl")).default;
+      if (cancelled || !mapContainer.current || mapRef.current) return;
+      mapboxglRef.current = mapboxgl;
+      mapboxgl.accessToken = TOKEN;
+
+      const map = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: MAP_STYLE,
+        center: [BCN.lng, BCN.lat],
+        zoom: DEFAULT_ZOOM,
+        attributionControl: true, // keep Mapbox/OSM attribution (required by TOS)
+      });
+      mapRef.current = map;
+
+      // Gestures: scroll-wheel zoom (desktop) + pinch-to-zoom (mobile) — Step 6.
+      map.scrollZoom.enable();
+      map.touchZoomRotate.enable();
+
+      map.on("load", () => {
+        if (cancelled) return;
+        map.resize();
+
+        /* ═══ [TERRACE LAYER] ══════════════════════════════════════════════
+         * One GeoJSON source + one circle layer renders every terrace. It
+         * starts empty; [DATA SYNC] calls setData() once data/shadows arrive.
+         * ──────────────────────────────────────────────────────────────── */
+        map.addSource(SOURCE_ID, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+          promoteId: "id",
+        });
+
+        map.addLayer({
+          id: LAYER_ID,
+          type: "circle",
+          source: SOURCE_ID,
+          paint: {
+            "circle-radius": [
+              "interpolate", ["linear"], ["zoom"],
+              11, ["case", ["boolean", ["feature-state", "selected"], false], 6, 3],
+              14, ["case", ["boolean", ["feature-state", "selected"], false], 9, 5.5],
+              17, ["case", ["boolean", ["feature-state", "selected"], false], 14, 9],
+            ],
+            "circle-color": [
+              "match", ["get", "state"],
+              "sun", COLOR_SUN,
+              "shade", COLOR_SHADE,
+              COLOR_NIGHT, // night / unknown / calculating
+            ],
+            "circle-stroke-width": [
+              "case", ["boolean", ["feature-state", "selected"], false], 3.5, 1.5,
+            ],
+            "circle-stroke-color": [
+              "case", ["boolean", ["feature-state", "selected"], false], "#1a1a17", "#ffffff",
+            ],
+            "circle-opacity": 0.95,
+          },
+        });
+
+        // Click a dot → open the popup card + highlight via feature-state.
+        map.on("click", LAYER_ID, (e) => {
+          const f = e.features?.[0];
+          if (!f) return;
+          const props = f.properties as { id: string; name: string; address: string; state: TerraceState };
+          const id = String(props.id);
+          const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates;
+
+          if (selectedIdRef.current && selectedIdRef.current !== id) {
+            map.setFeatureState({ source: SOURCE_ID, id: selectedIdRef.current }, { selected: false });
+          }
+          map.setFeatureState({ source: SOURCE_ID, id }, { selected: true });
+          selectedIdRef.current = id;
+          setSelected({ id, name: props.name, address: props.address, lng, lat, state: props.state });
+        });
+
+        map.on("mouseenter", LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
+
+        // Recompute shadows after the user pans/zooms (debounced). Buildings
+        // are cached per viewport, so small moves reuse the existing data.
+        map.on("moveend", () => {
+          window.clearTimeout(moveTimerRef.current);
+          moveTimerRef.current = window.setTimeout(() => recalcRef.current(), MOVE_DEBOUNCE_MS);
+        });
+
+        setMapReady(true);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      mapRef.current?.remove();
+      mapRef.current = null;
+      userMarkerRef.current = null;
+      selectedIdRef.current = null;
+    };
+  }, []);
+
+  /* ═══ [DATA SYNC] ══════════════════════════════════════════════════════
+   * Paint each dot: night → grey; otherwise the worker's sun/shade result, or
+   * grey ("calculando") until it arrives.
+   * ──────────────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const src = map.getSource(SOURCE_ID) as GeoJSONSource | undefined;
+    if (!src) return;
+    const colored = terraces.map((t) => {
+      const state: TerraceState = sun.isNight ? "night" : (shadeStates[t.id] ?? "unknown");
+      return { ...t, state };
+    });
+    src.setData(terracesToGeoJSON(colored));
+  }, [terraces, mapReady, sun, shadeStates]);
+
+  /* ═══ [MAP CONTROLS] — Step 6 ══════════════════════════════════════════ */
+
+  const zoomIn = () => mapRef.current?.zoomIn();
+  const zoomOut = () => mapRef.current?.zoomOut();
 
   const handleGeolocate = () => {
-    if (!navigator.geolocation) return;
+    const map = mapRef.current;
+    const mapboxgl = mapboxglRef.current;
+    if (!map || !mapboxgl || !navigator.geolocation) return;
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      () => {
-        // Mock map: drop a marker near center and zoom in
-        const pos = { x: 50, y: 50 };
-        setUserPos(pos);
-        setOrigin(pos);
-        setZoom(2.2);
+      (pos) => {
+        const { longitude, latitude } = pos.coords;
+        if (userMarkerRef.current) {
+          userMarkerRef.current.setLngLat([longitude, latitude]);
+        } else {
+          const el = document.createElement("div");
+          el.className = "haysol-user-dot";
+          userMarkerRef.current = new mapboxgl.Marker({ element: el }).setLngLat([longitude, latitude]).addTo(map);
+        }
+        map.flyTo({ center: [longitude, latitude], zoom: 16, essential: true });
         setLocating(false);
       },
       () => setLocating(false),
@@ -116,70 +388,86 @@ export function MapView({ when, onEdit }: Props) {
     );
   };
 
+  const closePopup = () => {
+    const id = selectedIdRef.current;
+    if (id && mapRef.current) mapRef.current.setFeatureState({ source: SOURCE_ID, id }, { selected: false });
+    selectedIdRef.current = null;
+    setSelected(null);
+  };
+
+  /* ═══ [UI CHROME] — preserved from the original design ═════════════════ */
+
+  const sel = selected;
+  // Live state for the open card — reflects the CURRENT time + shadow results,
+  // not the state captured when it was clicked (Step 5 polish).
+  const selState: TerraceState | null = sel ? (sun.isNight ? "night" : (shadeStates[sel.id] ?? "unknown")) : null;
+  const isSun = selState === "sun";
+  const isShade = selState === "shade";
+  const isNight = selState === "night";
+
+  // Popup duration line (Step 5).
+  let durationText: string | null = null;
+  if (isNight) {
+    durationText = sunriseISO ? `El sol sale a las ${hhmm(sunriseISO)}` : "El sol sale por la mañana";
+  } else if ((isSun || isShade) && durationInfo && durationInfo.current === selState) {
+    if (durationInfo.changeAtISO && !durationInfo.untilSunset) {
+      const cd = countdown(when.getTime(), new Date(durationInfo.changeAtISO).getTime());
+      durationText = isSun
+        ? `Sol hasta las ${hhmm(durationInfo.changeAtISO)} · ${cd} más`
+        : `Sol desde las ${hhmm(durationInfo.changeAtISO)} · en ${cd}`;
+    } else {
+      durationText = isSun ? "Sol hasta el atardecer" : "A la sombra hasta el atardecer";
+    }
+  } else if (isSun || isShade) {
+    durationText = "Calculando…";
+  }
+
+  // Single status pill (terrace load → shadow calc → errors).
+  let status: { text: string; tone: "info" | "error" } | null = null;
+  if (terracesQuery.isError) status = { text: "No se pudieron cargar las terrazas", tone: "error" };
+  else if (terracesQuery.isPending) status = { text: "Cargando terrazas…", tone: "info" };
+  else if (!sun.isNight && (shadowStatus === "loading" || shadowStatus === "calculating")) status = { text: "Calculando sombras…", tone: "info" };
+  else if (!sun.isNight && shadowStatus === "error") status = { text: "Sombras no disponibles", tone: "error" };
+
   return (
     <section className="relative w-full h-screen overflow-hidden bg-muted">
-      {/* Zoomable map layer */}
-      <div
-        ref={containerRef}
-        className="absolute inset-0 touch-none"
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-      >
-        <div
-          className="absolute inset-0 transition-transform duration-150 ease-out"
-          style={{ transform: `scale(${zoom})`, transformOrigin: `${origin.x}% ${origin.y}%` }}
-        >
-          {/* Mock map */}
-          <div className="absolute inset-0 mock-map" />
-          {/* Subtle streets overlay */}
-          <svg className="absolute inset-0 w-full h-full opacity-50" preserveAspectRatio="none" viewBox="0 0 100 100">
-            <g stroke="#a89e88" strokeWidth="0.3" fill="none">
-              <path d="M0,30 L100,25" />
-              <path d="M0,55 L100,60" />
-              <path d="M0,80 L100,78" />
-              <path d="M25,0 L30,100" />
-              <path d="M55,0 L52,100" />
-              <path d="M78,0 L80,100" />
-              <path d="M10,10 L90,90" strokeWidth="0.2" />
-            </g>
-          </svg>
+      {/* Real Mapbox canvas mounts here (replaces the old fake SVG map).
+          NOTE: mapbox-gl.css adds `.mapboxgl-map { position: relative }`, which
+          would override a Tailwind `absolute` class and collapse the height to 0.
+          We pin position + insets inline (highest specificity) so the map always
+          fills the full-screen <section> regardless of stylesheet load order. */}
+      <div ref={mapContainer} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
 
-          {/* Dots */}
-          {TERRACES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setSelected(t)}
-              aria-label={t.name}
-              className="absolute z-10 -translate-x-1/2 -translate-y-1/2 group"
-              style={{ left: `${t.x}%`, top: `${t.y}%` }}
-            >
-              <span
-                className={`block size-5 sm:size-6 rounded-full ring-4 ring-background shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition-transform group-hover:scale-125 ${
-                  t.sun ? "bg-dot-sun" : "bg-dot-shade"
-                } ${selected?.id === t.id ? "scale-125 ring-foreground" : ""}`}
-              />
-              {t.sun && (
-                <span className="absolute inset-0 rounded-full bg-dot-sun animate-ping opacity-40" />
-              )}
-            </button>
-          ))}
+      {/* No-token fallback: friendly message instead of a blank/broken map */}
+      {!HAS_TOKEN && (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-muted px-6 text-center">
+          <div className="max-w-sm rounded-3xl bg-background shadow-lg p-6">
+            <Sun className="mx-auto size-8 text-terracotta" />
+            <h2 className="mt-3 font-display text-xl font-bold">Falta el token de Mapbox</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Añade tu <code className="font-mono">VITE_MAPBOX_TOKEN</code> en el archivo{" "}
+              <code className="font-mono">.env</code> y reinicia el servidor para ver el mapa.
+            </p>
+          </div>
+        </div>
+      )}
 
-          {/* User location marker */}
-          {userPos && (
-            <div
-              className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
-              style={{ left: `${userPos.x}%`, top: `${userPos.y}%` }}
-              aria-label="Tu ubicación"
-            >
-              <span className="block size-4 rounded-full bg-blue-500 ring-4 ring-background shadow-[0_2px_6px_rgba(0,0,0,0.35)]" />
-              <span className="absolute inset-0 rounded-full bg-blue-500 animate-ping opacity-40" />
-            </div>
+      {/* Status pill (loading terraces / calculating shadows / errors) */}
+      {HAS_TOKEN && status && (
+        <div className="absolute top-[4.5rem] left-1/2 -translate-x-1/2 z-20">
+          {status.tone === "info" ? (
+            <span className="flex items-center gap-2 rounded-full bg-background/95 backdrop-blur px-3 py-1.5 shadow-md text-xs font-medium text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" /> {status.text}
+            </span>
+          ) : (
+            <span className="flex items-center gap-2 rounded-full bg-destructive text-destructive-foreground px-3 py-1.5 shadow-md text-xs font-medium">
+              <AlertTriangle className="size-3.5" /> {status.text}
+            </span>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Time pill */}
+      {/* Time pill (top) */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 md:left-6 md:translate-x-0">
         <button
           onClick={onEdit}
@@ -193,19 +481,20 @@ export function MapView({ when, onEdit }: Props) {
         </button>
       </div>
 
-      {/* Legend */}
+      {/* Legend (top-right) */}
       <div className="absolute top-4 right-4 z-20 hidden sm:flex flex-col gap-1.5 rounded-2xl bg-background/90 backdrop-blur px-3 py-2 shadow-md text-xs font-medium">
         <span className="flex items-center gap-2"><span className="size-3 rounded-full bg-dot-sun ring-2 ring-foreground/10" /> Sol</span>
         <span className="flex items-center gap-2"><span className="size-3 rounded-full bg-dot-shade ring-2 ring-foreground/10" /> Sombra</span>
       </div>
 
-      {/* Map controls (bottom-right) */}
+      {/* Map controls (bottom-right): zoom + geolocate */}
       <div className="absolute bottom-6 right-4 z-20 flex flex-col gap-2 items-end">
         <div className="flex flex-col rounded-full bg-background shadow-lg overflow-hidden">
           <button
             onClick={zoomIn}
             aria-label="Acercar"
-            className="grid place-items-center size-11 hover:bg-muted transition-colors"
+            className="grid place-items-center size-11 hover:bg-muted transition-colors disabled:opacity-50"
+            disabled={!mapReady}
           >
             <Plus className="size-5" />
           </button>
@@ -213,7 +502,8 @@ export function MapView({ when, onEdit }: Props) {
           <button
             onClick={zoomOut}
             aria-label="Alejar"
-            className="grid place-items-center size-11 hover:bg-muted transition-colors"
+            className="grid place-items-center size-11 hover:bg-muted transition-colors disabled:opacity-50"
+            disabled={!mapReady}
           >
             <Minus className="size-5" />
           </button>
@@ -221,7 +511,7 @@ export function MapView({ when, onEdit }: Props) {
         <button
           onClick={handleGeolocate}
           aria-label="Mi ubicación"
-          disabled={locating}
+          disabled={locating || !mapReady}
           className="grid place-items-center size-12 rounded-full bg-background shadow-lg hover:bg-muted transition-colors disabled:opacity-70"
         >
           {locating ? <Loader2 className="size-5 animate-spin" /> : <LocateFixed className="size-5" />}
@@ -233,11 +523,18 @@ export function MapView({ when, onEdit }: Props) {
         )}
       </div>
 
-      {/* Bottom sheet */}
+      {/* Disclaimer — shadows are a calculated estimate, not surveyed truth */}
+      <div className="absolute bottom-7 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+        <span className="rounded-full bg-background/60 backdrop-blur-sm px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground/90">
+          Sombras aproximadas
+        </span>
+      </div>
+
+      {/* Popup card (bottom sheet) */}
       <AnimatePresence>
-        {selected && (
+        {sel && (
           <motion.div
-            key={selected.id}
+            key={sel.id}
             initial={{ y: 200, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 200, opacity: 0 }}
@@ -248,33 +545,37 @@ export function MapView({ when, onEdit }: Props) {
               <div className="flex items-center gap-2">
                 <span
                   className={`grid place-items-center size-9 rounded-full ${
-                    selected.sun ? "bg-dot-sun text-foreground" : "bg-dot-shade text-background"
+                    isSun
+                      ? "bg-dot-sun text-foreground"
+                      : isShade
+                        ? "bg-dot-shade text-background"
+                        : "bg-muted-foreground text-background"
                   }`}
                 >
-                  {selected.sun ? <Sun className="size-5" /> : <TreePine className="size-5" />}
+                  {isSun ? <Sun className="size-5" /> : isShade ? <TreePine className="size-5" /> : isNight ? <Moon className="size-5" /> : <Sun className="size-5" />}
                 </span>
                 <span className="font-display font-semibold text-sm">
-                  {selected.sun ? "En el sol" : "En la sombra"}
+                  {isSun ? "En el sol" : isShade ? "En la sombra" : isNight ? "Es de noche" : "Terraza"}
                 </span>
               </div>
               <button
-                onClick={() => setSelected(null)}
+                onClick={closePopup}
                 className="grid place-items-center size-8 rounded-full hover:bg-muted"
                 aria-label="Cerrar"
               >
                 <X className="size-4" />
               </button>
             </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {selected.sun
-                ? "Sol hasta las 19:45 · 2h 28min más"
-                : "Sombra hasta las 20:00 · 43min más"}
-            </p>
-            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{selected.name}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{selected.address}</p>
+            {/* Step 5: real "Sun until X" line (computed in the worker). */}
+            {durationText && (
+              <p className="mt-1.5 text-xs text-muted-foreground">{durationText}</p>
+            )}
+            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{sel.name}</h2>
+            {sel.address && <p className="mt-1 text-sm text-muted-foreground">{sel.address}</p>}
+            {/* ¿Cómo llegar? → Google Maps directions, new tab (Step 6) */}
             <a
               href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                selected.name + ", " + selected.address + ", Barcelona"
+                sel.name + ", " + sel.address + ", Barcelona"
               )}`}
               target="_blank"
               rel="noreferrer"
