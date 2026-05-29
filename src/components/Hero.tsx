@@ -1,9 +1,7 @@
 import { useRef, useState } from "react";
 import { ArrowRight, Calendar, Clock } from "lucide-react";
-import { motion, useScroll, useTransform } from "motion/react";
+import { motion, useScroll, useTransform, useMotionValue, type MotionValue } from "motion/react";
 import bottle from "@/assets/bottle.png";
-import canya from "@/assets/canya.png";
-import vermut from "@/assets/vermut.png";
 import sun from "@/assets/sun.png";
 
 type Props = {
@@ -17,6 +15,106 @@ function nowStr() {
   return new Date().toTimeString().slice(0, 5);
 }
 
+/* ---------- Inline SVG glasses (so we can fill them on scroll) ---------- */
+
+function BeerGlass({ fill }: { fill: MotionValue<number> }) {
+  // liquid rises from y=150 (empty) to y=22 (full)
+  const liquidY = useTransform(fill, [0, 1], [150, 22]);
+  const foamY = useTransform(fill, [0, 1], [152, 24]);
+  const foamOpacity = useTransform(fill, [0, 0.08], [0, 1]);
+  const bubble1Y = useTransform(fill, [0.2, 1], [150, 30]);
+  const bubble2Y = useTransform(fill, [0.4, 1], [150, 50]);
+
+  return (
+    <svg viewBox="0 0 110 160" className="w-full h-full" aria-hidden>
+      <defs>
+        <clipPath id="beer-interior">
+          <path d="M18 18 L92 18 L86 146 Q86 150 82 150 L28 150 Q24 150 24 146 Z" />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#beer-interior)">
+        <motion.rect x="0" width="110" y={liquidY} height="200" fill="#F5B017" />
+        <motion.circle cx="40" cy={bubble1Y} r="2" fill="rgba(255,255,255,0.7)" />
+        <motion.circle cx="68" cy={bubble2Y} r="1.5" fill="rgba(255,255,255,0.7)" />
+        <motion.g style={{ opacity: foamOpacity }}>
+          <motion.ellipse cx="55" cy={foamY} rx="34" ry="6" fill="#FFF8E7" />
+          <motion.ellipse cx="42" cy={useTransform(foamY, (v) => v - 3)} rx="10" ry="5" fill="#FFFDF4" />
+          <motion.ellipse cx="68" cy={useTransform(foamY, (v) => v - 4)} rx="9" ry="5" fill="#FFFDF4" />
+        </motion.g>
+      </g>
+      {/* glass outline */}
+      <path
+        d="M18 18 L92 18 L86 146 Q86 152 80 152 L30 152 Q24 152 24 146 Z"
+        fill="none"
+        stroke="#1a1a1a"
+        strokeWidth="3"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <line x1="18" y1="18" x2="92" y2="18" stroke="#1a1a1a" strokeWidth="3" strokeLinecap="round" />
+      <line x1="32" y1="30" x2="29" y2="130" stroke="rgba(255,255,255,0.5)" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function VermouthGlass({ fill }: { fill: MotionValue<number> }) {
+  const liquidY = useTransform(fill, [0, 1], [118, 32]);
+  const iceY = useTransform(fill, [0.18, 0.42], [-30, 60]);
+  const iceOp = useTransform(fill, [0.18, 0.24], [0, 1]);
+  const orangeY = useTransform(fill, [0.4, 0.62], [-30, 78]);
+  const orangeOp = useTransform(fill, [0.4, 0.46], [0, 1]);
+  const oliveY = useTransform(fill, [0.6, 0.85], [-40, 52]);
+  const oliveOp = useTransform(fill, [0.6, 0.66], [0, 1]);
+  const stickY1 = useTransform(oliveY, (v) => v - 38);
+
+  return (
+    <svg viewBox="0 0 120 135" className="w-full h-full" aria-hidden>
+      <defs>
+        <clipPath id="vermut-interior">
+          <path d="M18 18 L102 18 L100 116 Q100 122 94 122 L26 122 Q20 122 20 116 Z" />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#vermut-interior)">
+        <motion.rect x="0" width="120" y={liquidY} height="200" fill="#7A1818" />
+        {/* ice cube */}
+        <motion.rect
+          x="42"
+          width="26"
+          height="22"
+          y={iceY}
+          fill="rgba(220,240,250,0.7)"
+          stroke="rgba(255,255,255,0.9)"
+          strokeWidth="1.5"
+          rx="2"
+          style={{ opacity: iceOp }}
+        />
+        {/* orange slice */}
+        <motion.g style={{ opacity: orangeOp }}>
+          <motion.circle cx="78" cy={orangeY} r="11" fill="#FF8C2A" stroke="#C95A0F" strokeWidth="1.5" />
+          <motion.circle cx="78" cy={orangeY} r="6" fill="none" stroke="#FFD89A" strokeWidth="1" />
+        </motion.g>
+        {/* olive on stick */}
+        <motion.g style={{ opacity: oliveOp }}>
+          <motion.line x1="52" x2="52" y1={stickY1} y2={oliveY} stroke="#3d2817" strokeWidth="1.8" strokeLinecap="round" />
+          <motion.ellipse cx="52" cy={oliveY} rx="6" ry="7" fill="#5A7A2E" stroke="#2d4318" strokeWidth="1.2" />
+        </motion.g>
+      </g>
+      {/* glass outline */}
+      <path
+        d="M18 18 L102 18 L100 116 Q100 124 92 124 L28 124 Q20 124 20 116 Z"
+        fill="none"
+        stroke="#1a1a1a"
+        strokeWidth="3"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <line x1="26" y1="28" x2="26" y2="108" stroke="rgba(255,255,255,0.45)" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* ---------------------------------- Hero ---------------------------------- */
+
 export function Hero({ onSubmit }: Props) {
   const [date, setDate] = useState(todayStr());
   const [time, setTime] = useState(nowStr());
@@ -27,82 +125,101 @@ export function Hero({ onSubmit }: Props) {
     offset: ["start start", "end end"],
   });
 
-  // Everything translates downward as the user scrolls so illustrations
-  // travel from section 1 into section 2.
-  const dropY = useTransform(scrollYProgress, [0, 1], ["0vh", "95vh"]);
+  // Section 1 is 200vh + section 2 ~100vh => total ~300vh.
+  // Fill the glasses from very early scroll to ~end of section 1 (≈ 0.6 of wrapper).
+  const glassFill = useTransform(scrollYProgress, [0.02, 0.6], [0, 1]);
 
-  // Vichy bottle — pours and lands bottom-left (stays in left 25%)
-  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.6], [-6, -35]);
-  const bottleX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "-2vw"]);
+  // Small Vichy bottles slide in around 80% through section 1 (≈ 0.5–0.62 wrapper).
+  const bottleLeftX = useTransform(scrollYProgress, [0.5, 0.65], [-320, 0]);
+  const bottleRightX = useTransform(scrollYProgress, [0.5, 0.65], [320, 0]);
+  const bottleOpacity = useTransform(scrollYProgress, [0.5, 0.6], [0, 1]);
 
-  // Estrella caña — tips and lands bottom-right (stays in right 25%)
-  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, 30]);
-  const canyaX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "2vw"]);
-
-  // Vermut — drifts to upper-right corner
-  const vermutRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -20]);
-  const vermutX = useTransform(scrollYProgress, [0.05, 0.6], ["0vw", "2vw"]);
-
-  // Sun — drifts to upper-left corner only (no rightward movement)
-  const sunX = useTransform(scrollYProgress, [0, 1], ["0vw", "-2vw"]);
-  const sunArcY = useTransform(scrollYProgress, [0, 1], ["0vh", "-2vh"]);
-  const sunRotate = useTransform(scrollYProgress, [0, 1], [0, 90]);
+  // Static full fill for the section-2 header row glasses
+  const fullFill = useMotionValue(1);
 
   return (
-    <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
-      {/* ===== Floating illustrations — frame the CTA from the edges.
-              All are pointer-events-none and sit below the CTA z-index. ===== */}
-      <motion.img
-        src={sun}
-        alt=""
-        aria-hidden
-        style={{ x: sunX, y: sunArcY, rotate: sunRotate }}
-        className="pointer-events-none fixed top-[6%] left-[3%] w-20 sm:w-24 md:w-28 z-0"
-      />
-      <motion.img
-        src={vermut}
-        alt=""
-        aria-hidden
-        style={{ y: dropY, x: vermutX, rotate: vermutRotate, transformOrigin: "30% 90%" }}
-        className="pointer-events-none absolute top-[8%] right-[4%] w-20 sm:w-28 md:w-32 z-0"
-      />
-      <motion.img
-        src={bottle}
-        alt="Botella de Vichy Catalán"
-        style={{ y: dropY, x: bottleX, rotate: bottleRotate, transformOrigin: "70% 90%" }}
-        className="pointer-events-none absolute top-[50vh] left-[1%] sm:left-[2%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-0"
-      />
-      <motion.img
-        src={canya}
-        alt="Caña de cerveza Estrella"
-        style={{ y: dropY, x: canyaX, rotate: canyaRotate, transformOrigin: "30% 90%" }}
-        className="pointer-events-none absolute top-[62vh] right-[1%] sm:right-[3%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-0"
-      />
+    <div ref={wrapperRef} className="relative bg-sun text-foreground">
+      {/* ===== Sun — animated arc on page load, then rests ===== */}
+      <motion.div
+        className="fixed z-0 pointer-events-none w-20 sm:w-24 md:w-28 aspect-square"
+        style={{ marginLeft: "-3rem", marginTop: "-3rem" }}
+        initial={{ left: "8vw", top: "78vh", opacity: 0 }}
+        animate={{
+          left: ["8vw", "50vw", "88vw"],
+          top: ["78vh", "8vh", "68vh"],
+          opacity: [0, 1, 1, 1],
+        }}
+        transition={{
+          duration: 2.5,
+          ease: "easeInOut",
+          times: [0, 0.5, 1],
+          opacity: { duration: 0.4, times: [0, 0.2, 0.5, 1] },
+        }}
+      >
+        <motion.img
+          src={sun}
+          alt=""
+          aria-hidden
+          className="w-full h-full"
+          animate={{ rotate: 360 }}
+          transition={{ duration: 2.5, ease: "easeInOut" }}
+        />
+      </motion.div>
 
-      {/* ============ SECTION 1 — above the fold ============ */}
-      <section className="relative h-screen w-full">
-        {/* Title block */}
-
-        <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
-          <h1 className="font-display font-bold leading-[0.9] text-foreground text-[22vw] sm:text-8xl md:text-9xl">
+      {/* ============ SECTION 1 — hero, tall so we can fill on scroll ============ */}
+      <section className="relative h-[200vh] w-full">
+        <div className="sticky top-0 h-screen w-full flex flex-col items-center justify-center px-5 overflow-hidden">
+          <h1 className="font-display font-bold leading-[0.9] text-foreground text-[20vw] sm:text-8xl md:text-9xl text-center">
             ¿Hay <span className="text-terracotta">Sol</span>?
           </h1>
-          <p className="mt-4 text-base sm:text-lg md:text-xl font-medium text-foreground/80">
+          <p className="mt-3 text-base sm:text-lg md:text-xl font-medium text-foreground/80 text-center">
             Encuentra tu terraza en Barcelona
           </p>
-        </div>
 
-        {/* Scroll hint */}
-        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
-          <span>Scroll</span>
-          <span aria-hidden className="animate-bounce">↓</span>
+          {/* Two glasses side by side */}
+          <div className="mt-8 sm:mt-10 flex items-end justify-center gap-6 sm:gap-10">
+            <div className="w-24 sm:w-28 md:w-32 h-36 sm:h-40 md:h-44">
+              <BeerGlass fill={glassFill} />
+            </div>
+            <div className="w-24 sm:w-28 md:w-32 h-32 sm:h-36 md:h-40">
+              <VermouthGlass fill={glassFill} />
+            </div>
+          </div>
+
+          {/* Scroll hint */}
+          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
+            <span>Scroll</span>
+            <span aria-hidden className="animate-bounce">↓</span>
+          </div>
         </div>
       </section>
 
-      {/* ============ SECTION 2 — revealed on scroll ============ */}
-      <section className="relative min-h-screen w-full flex items-center justify-center px-5 py-12">
-        <div className="relative z-10 w-full max-w-[420px]">
+      {/* ============ SECTION 2 — drink row + CTAs ============ */}
+      <section className="relative min-h-screen w-full flex flex-col items-center px-5 py-12">
+        {/* 4-element header row: bottle · beer · vermouth · bottle */}
+        <div className="flex items-end justify-center gap-3 sm:gap-5 mb-10 sm:mb-12 overflow-hidden w-full">
+          <motion.img
+            src={bottle}
+            alt="Botella de Vichy Catalán"
+            style={{ x: bottleLeftX, opacity: bottleOpacity }}
+            className="pointer-events-none h-28 sm:h-32 md:h-36 w-auto"
+          />
+          <div className="w-20 sm:w-24 md:w-28 h-32 sm:h-36 md:h-40">
+            <BeerGlass fill={fullFill} />
+          </div>
+          <div className="w-20 sm:w-24 md:w-28 h-28 sm:h-32 md:h-36">
+            <VermouthGlass fill={fullFill} />
+          </div>
+          <motion.img
+            src={bottle}
+            alt="Botella de Vichy Catalán"
+            style={{ x: bottleRightX, opacity: bottleOpacity }}
+            className="pointer-events-none h-28 sm:h-32 md:h-36 w-auto"
+          />
+        </div>
 
+        {/* CTA column — always on top */}
+        <div className="relative z-10 w-full max-w-[420px]">
           <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
             ¿Cuándo buscas <span className="text-terracotta">sol</span>?
           </h2>
