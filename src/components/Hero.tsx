@@ -1,43 +1,102 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowRight, Calendar, Clock } from "lucide-react";
+import { motion, useScroll, useTransform } from "motion/react";
 import { ScatteredIllustrations } from "./Illustrations";
-import { PouringBottle } from "./PouringBottle";
+import bottle from "@/assets/bottle.png";
+import canya from "@/assets/canya.png";
+import vermut from "@/assets/vermut.png";
 
 type Props = {
   onSubmit: (when: Date) => void;
 };
 
 function todayStr() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
 }
 function nowStr() {
-  const d = new Date();
-  return d.toTimeString().slice(0, 5);
+  return new Date().toTimeString().slice(0, 5);
 }
 
 export function Hero({ onSubmit }: Props) {
   const [date, setDate] = useState(todayStr());
   const [time, setTime] = useState(nowStr());
 
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: wrapperRef,
+    offset: ["start start", "end end"],
+  });
+
+  // Scroll-driven pour: tilts engage as user scrolls from section 1 into section 2.
+  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.55], [-6, 55]);
+  const bottleX = useTransform(scrollYProgress, [0.05, 0.55], [0, 40]);
+  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.55], [8, -40]);
+  const canyaX = useTransform(scrollYProgress, [0.05, 0.55], [0, -30]);
+  const canyaY = useTransform(scrollYProgress, [0.05, 0.55], [0, -20]);
+
   return (
-    <section className="relative min-h-screen w-full bg-sun text-foreground overflow-hidden">
-      <ScatteredIllustrations />
+    <div ref={wrapperRef} className="bg-sun text-foreground">
+      {/* ============ SECTION 1 — above the fold ============ */}
+      <section className="relative h-screen w-full overflow-hidden">
+        <ScatteredIllustrations />
 
-      <div className="relative z-10 mx-auto flex min-h-screen max-w-6xl flex-col items-center px-5 pt-12 pb-10 md:grid md:grid-cols-2 md:gap-10 md:pt-20">
-        {/* Bottle column (desktop left) */}
-        <div className="order-2 md:order-1 mt-2 md:mt-0 flex items-end justify-center w-full">
-          <PouringBottle />
-        </div>
+        {/* Vermouth — top right */}
+        <img
+          src={vermut}
+          alt=""
+          aria-hidden
+          className="pointer-events-none absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 float"
+          style={{ ["--r" as any]: "8deg", animationDelay: "0.8s" }}
+        />
 
-        {/* Text + inputs column */}
-        <div className="order-1 md:order-2 flex flex-col items-center md:items-start text-center md:text-left w-full max-w-md">
-          <h1 className="font-display text-[18vw] leading-[0.9] sm:text-7xl md:text-8xl font-bold text-foreground">
+        {/* Bottle — bottom left, scroll-tilts toward the centre */}
+        <motion.img
+          src={bottle}
+          alt="Botella de Vichy Catalán"
+          style={{
+            rotate: bottleRotate,
+            x: bottleX,
+            transformOrigin: "70% 90%",
+          }}
+          className="pointer-events-none absolute bottom-[8%] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto"
+        />
+
+        {/* Estrella caña — bottom right, scroll-tilts toward the centre */}
+        <motion.img
+          src={canya}
+          alt="Caña de cerveza Estrella"
+          style={{
+            rotate: canyaRotate,
+            x: canyaX,
+            y: canyaY,
+            transformOrigin: "30% 90%",
+          }}
+          className="pointer-events-none absolute bottom-[10%] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto"
+        />
+
+        {/* Title block */}
+        <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
+          <h1 className="font-display font-bold leading-[0.9] text-foreground text-[22vw] sm:text-8xl md:text-9xl">
             ¿Hay <span className="text-terracotta">Sol</span>?
           </h1>
-          <p className="mt-4 text-base sm:text-lg font-medium text-foreground/80">
+          <p className="mt-4 text-base sm:text-lg md:text-xl font-medium text-foreground/80">
             Encuentra tu terraza en Barcelona
           </p>
+        </div>
+
+        {/* Scroll hint */}
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
+          <span>Scroll</span>
+          <span aria-hidden className="animate-bounce">↓</span>
+        </div>
+      </section>
+
+      {/* ============ SECTION 2 — revealed on scroll ============ */}
+      <section className="relative min-h-screen w-full flex items-center justify-center px-5 py-12">
+        <div className="relative z-10 w-full max-w-md">
+          <h2 className="font-display text-3xl sm:text-4xl font-bold text-foreground text-center">
+            ¿Cuándo buscas <span className="text-terracotta">sol</span>?
+          </h2>
 
           <div className="mt-8 w-full space-y-4">
             <button
@@ -85,12 +144,7 @@ export function Hero({ onSubmit }: Props) {
             </button>
           </div>
         </div>
-      </div>
-
-      {/* scroll hint */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 text-xs font-medium text-foreground/60 animate-bounce">
-        Scroll ↓
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }
