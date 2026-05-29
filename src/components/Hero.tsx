@@ -27,51 +27,60 @@ export function Hero({ onSubmit }: Props) {
     offset: ["start start", "end end"],
   });
 
-  // Vichy bottle — capped pour, frozen after halfway through the hero scroll
-  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.5, 1], [-6, -35, -35]);
+  // Everything translates downward as the user scrolls so illustrations
+  // travel from section 1 into section 2.
+  const dropY = useTransform(scrollYProgress, [0, 1], ["0vh", "95vh"]);
 
-  // Estrella caña — capped receiving tilt, frozen after halfway
-  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.5, 1], [8, 30, 30]);
+  // Vichy bottle — pours to the right
+  const bottleRotate = useTransform(scrollYProgress, [0.05, 0.6], [-6, 70]);
+  const bottleX = useTransform(scrollYProgress, [0.05, 0.6], [0, 60]);
 
-  // Vermut — gentle pour, also finishes by halfway
-  const vermutRotate = useTransform(scrollYProgress, [0.05, 0.5, 1], [8, -35, -35]);
+  // Estrella caña — tilts toward centre as if catching the pour
+  const canyaRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -45]);
+  const canyaX = useTransform(scrollYProgress, [0.05, 0.6], [0, -40]);
 
-  // Sun stays horizontally locked; only a tiny natural emphasis on scroll
-  const sunScale = useTransform(scrollYProgress, [0, 0.5, 1], [1, 1.1, 1.05]);
+  // Vermut — also pours, tilts opposite
+  const vermutRotate = useTransform(scrollYProgress, [0.05, 0.6], [8, -55]);
+  const vermutX = useTransform(scrollYProgress, [0.05, 0.6], [0, -30]);
+
+  // Sun — arcs across the sky: rises to a peak then sets on the far side
+  const sunX = useTransform(scrollYProgress, [0, 0.5, 1], ["0vw", "40vw", "78vw"]);
+  const sunArcY = useTransform(scrollYProgress, [0, 0.5, 1], ["0vh", "-8vh", "20vh"]);
+  const sunRotate = useTransform(scrollYProgress, [0, 1], [0, 180]);
 
   return (
-    <div ref={wrapperRef} className="bg-sun text-foreground">
-      {/* ============ SECTION 1 — above the fold ============ */}
-      <section className="relative h-screen w-full overflow-hidden">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-          <motion.img
-            src={sun}
-            alt=""
-            aria-hidden
-            style={{ scale: sunScale }}
-            className="absolute top-[8%] left-[4%] w-20 sm:w-24 md:w-28 z-20"
-          />
-          <motion.img
-            src={vermut}
-            alt=""
-            aria-hidden
-            style={{ rotate: vermutRotate, transformOrigin: "30% 90%" }}
-            className="absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 z-20"
-          />
-          <motion.img
-            src={bottle}
-            alt="Botella de Vichy Catalán"
-            style={{ rotate: bottleRotate, transformOrigin: "70% 90%" }}
-            className="absolute top-[50vh] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-20"
-          />
-          <motion.img
-            src={canya}
-            alt="Caña de cerveza Estrella"
-            style={{ rotate: canyaRotate, transformOrigin: "30% 90%" }}
-            className="absolute top-[62vh] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-20"
-          />
-        </div>
+    <div ref={wrapperRef} className="relative bg-sun text-foreground overflow-hidden">
+      {/* ===== Floating illustrations — live above both sections so they
+              remain visible as the user scrolls from section 1 to 2. ===== */}
+      <motion.img
+        src={sun}
+        alt=""
+        aria-hidden
+        style={{ x: sunX, y: sunArcY, rotate: sunRotate }}
+        className="pointer-events-none fixed top-[8%] left-[4%] w-20 sm:w-24 md:w-28 z-20"
+      />
+      <motion.img
+        src={vermut}
+        alt=""
+        aria-hidden
+        style={{ y: dropY, x: vermutX, rotate: vermutRotate, transformOrigin: "30% 90%" }}
+        className="pointer-events-none absolute top-[10%] right-[6%] w-20 sm:w-28 md:w-32 z-20"
+      />
+      <motion.img
+        src={bottle}
+        alt="Botella de Vichy Catalán"
+        style={{ y: dropY, x: bottleX, rotate: bottleRotate, transformOrigin: "70% 90%" }}
+        className="pointer-events-none absolute top-[50vh] left-[2%] sm:left-[4%] h-[42vh] sm:h-[48vh] max-h-[460px] w-auto z-20"
+      />
+      <motion.img
+        src={canya}
+        alt="Caña de cerveza Estrella"
+        style={{ y: dropY, x: canyaX, rotate: canyaRotate, transformOrigin: "30% 90%" }}
+        className="pointer-events-none absolute top-[62vh] right-[3%] sm:right-[6%] h-[28vh] sm:h-[34vh] max-h-[320px] w-auto z-20"
+      />
 
+      {/* ============ SECTION 1 — above the fold ============ */}
+      <section className="relative h-screen w-full">
         {/* Title block */}
 
         <div className="relative z-10 mx-auto flex h-full max-w-5xl flex-col items-center justify-center px-5 text-center">
@@ -86,9 +95,7 @@ export function Hero({ onSubmit }: Props) {
         {/* Scroll hint */}
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 text-xs font-medium text-foreground/60">
           <span>Scroll</span>
-          <span aria-hidden className="animate-bounce">
-            ↓
-          </span>
+          <span aria-hidden className="animate-bounce">↓</span>
         </div>
       </section>
 
