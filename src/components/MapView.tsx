@@ -7,6 +7,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { fetchTerraces, terracesToGeoJSON, type Terrace, type TerraceState } from "@/lib/terraces";
 import { getSunPosition, getNextSunriseISO } from "@/lib/sun";
 import { fetchBuildings, type BBox, type BuildingFeature } from "@/lib/overpass";
+import { fetchBusinessName } from "@/lib/census";
 import type { ShadeResult, DurationResult } from "@/lib/shadow";
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -50,12 +51,24 @@ const MOVE_DEBOUNCE_MS = 500;
 
 /* ═══ helpers ════════════════════════════════════════════════════════════ */
 
-function formatWhen(d: Date) {
-  const isToday = new Date().toDateString() === d.toDateString();
+function formatWhen(d: Date): string {
+  const now = new Date();
   const time = d.toTimeString().slice(0, 5);
-  if (isToday) return `Ahora · ${time}`;
-  const day = d.toLocaleDateString("es-ES", { weekday: "long" });
-  return `${day.charAt(0).toUpperCase() + day.slice(1)} · ${time}`;
+
+  // "Ahora" only within 5 minutes of the real current time — never for a
+  // clearly past or future selection.
+  if (Math.abs(d.getTime() - now.getTime()) <= 5 * 60_000) return `Ahora · ${time}`;
+
+  // Relative day labels by calendar date.
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86_400_000);
+  if (dayDiff === 0) return `Hoy · ${time}`;
+  if (dayDiff === 1) return `Mañana · ${time}`;
+  if (dayDiff === -1) return `Ayer · ${time}`;
+
+  // Otherwise: abbreviated weekday + day-of-month, e.g. "Sáb 31 · 10:00".
+  const wd = d.toLocaleDateString("es-ES", { weekday: "short" }).replace(".", "");
+  return `${wd.charAt(0).toUpperCase() + wd.slice(1)} ${d.getDate()} · ${time}`;
 }
 
 // "2026-05-29T19:45:00" → "19:45"
@@ -98,6 +111,7 @@ export function MapView({ when, onEdit }: Props) {
   const [shadeStates, setShadeStates] = useState<ShadeResult>({});
   const [shadowStatus, setShadowStatus] = useState<"idle" | "loading" | "calculating" | "ready" | "error">("idle");
   const [durationInfo, setDurationInfo] = useState<DurationResult | null>(null); // Step 5: selected terrace
+  const [geoError, setGeoError] = useState<string | null>(null); // Step 6: geolocation feedback
 
   // Live refs
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -118,11 +132,25 @@ export function MapView({ when, onEdit }: Props) {
    * ──────────────────────────────────────────────────────────────────── */
   const terracesQuery = useQuery({
     queryKey: ["terraces"],
-    queryFn: () => fetchTerraces(500),
+    queryFn: () => fetchTerraces(),
     staleTime: Infinity,
     retry: 1,
   });
   const terraces = terracesQuery.data ?? [];
+
+  /* ═══ [BUSINESS NAME] — Barcelona commercial census ════════════════════
+   * On selection, look up the business at the terrace's address in the city's
+   * ground-floor commercial census (`Nom_Local`) — see src/lib/census.ts.
+   * Matches by address near the terrace, prefers food/drink. 100% open data,
+   * no OSM. Cached per terrace; null → fall back to the address.
+   * ──────────────────────────────────────────────────────────────────── */
+  const nameQuery = useQuery({
+    queryKey: ["businessName", selected?.id ?? "none"],
+    queryFn: () => fetchBusinessName(selected!.lat, selected!.lng, selected!.name),
+    enabled: !!selected,
+    staleTime: Infinity,
+    retry: 1,
+  });
 
   /* ═══ [SUN POSITION] — Step 3 ══════════════════════════════════════════
    * Sun altitude/azimuth for Barcelona at the selected time. Night (altitude
@@ -236,6 +264,13 @@ export function MapView({ when, onEdit }: Props) {
       startISO: when.toISOString(),
     });
   }, [selected, when, sun, shadeStates]);
+
+  // Auto-dismiss the geolocation message after a few seconds.
+  useEffect(() => {
+    if (!geoError) return;
+    const t = window.setTimeout(() => setGeoError(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [geoError]);
 
   /* ═══ [MAPBOX INIT] ════════════════════════════════════════════════════
    * Create the GL map once, client-side only. mapbox-gl is dynamically
@@ -368,7 +403,16 @@ export function MapView({ when, onEdit }: Props) {
   const handleGeolocate = () => {
     const map = mapRef.current;
     const mapboxgl = mapboxglRef.current;
-    if (!map || !mapboxgl || !navigator.geolocation) return;
+    if (!map || !mapboxgl) return;
+
+    // Geolocation needs a secure context (HTTPS or localhost). On plain HTTP
+    // over a LAN IP, navigator.geolocation is unavailable → tell the user.
+    if (!navigator.geolocation || (typeof window !== "undefined" && !window.isSecureContext)) {
+      setGeoError("Activa la ubicación para encontrar terrazas cercanas.");
+      return;
+    }
+
+    setGeoError(null);
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -383,7 +427,15 @@ export function MapView({ when, onEdit }: Props) {
         map.flyTo({ center: [longitude, latitude], zoom: 16, essential: true });
         setLocating(false);
       },
-      () => setLocating(false),
+      (err) => {
+        setLocating(false);
+        // PERMISSION_DENIED → ask them to enable it; other errors → generic retry.
+        setGeoError(
+          err.code === err.PERMISSION_DENIED
+            ? "Activa la ubicación para encontrar terrazas cercanas."
+            : "No pudimos obtener tu ubicación. Inténtalo de nuevo."
+        );
+      },
       { enableHighAccuracy: true, timeout: 10000 }
     );
   };
@@ -398,6 +450,9 @@ export function MapView({ when, onEdit }: Props) {
   /* ═══ [UI CHROME] — preserved from the original design ═════════════════ */
 
   const sel = selected;
+  // OSM business name for the open card (null while loading or if none nearby).
+  const osmName = sel && nameQuery.data ? nameQuery.data : null;
+  const popupSubtitle = sel ? (osmName ? [sel.name, sel.address].filter(Boolean).join(" · ") : sel.address) : "";
   // Live state for the open card — reflects the CURRENT time + shadow results,
   // not the state captured when it was clicked (Step 5 polish).
   const selState: TerraceState | null = sel ? (sun.isNight ? "night" : (shadeStates[sel.id] ?? "unknown")) : null;
@@ -422,12 +477,18 @@ export function MapView({ when, onEdit }: Props) {
     durationText = "Calculando…";
   }
 
-  // Single status pill (terrace load → shadow calc → errors).
-  let status: { text: string; tone: "info" | "error" } | null = null;
-  if (terracesQuery.isError) status = { text: "No se pudieron cargar las terrazas", tone: "error" };
-  else if (terracesQuery.isPending) status = { text: "Cargando terrazas…", tone: "info" };
-  else if (!sun.isNight && (shadowStatus === "loading" || shadowStatus === "calculating")) status = { text: "Calculando sombras…", tone: "info" };
-  else if (!sun.isNight && shadowStatus === "error") status = { text: "Sombras no disponibles", tone: "error" };
+  // Loading messages → centered bold card (so they're not missed on slow loads);
+  // errors → small top pill.
+  const loadingMessage = terracesQuery.isPending
+    ? "Cargando terrazas…"
+    : !sun.isNight && (shadowStatus === "loading" || shadowStatus === "calculating")
+      ? "Calculando sombras…"
+      : null;
+  const errorMessage = terracesQuery.isError
+    ? "No se pudieron cargar las terrazas"
+    : !sun.isNight && shadowStatus === "error"
+      ? "Sombras no disponibles"
+      : null;
 
   return (
     <section className="relative w-full h-screen overflow-hidden bg-muted">
@@ -452,18 +513,36 @@ export function MapView({ when, onEdit }: Props) {
         </div>
       )}
 
-      {/* Status pill (loading terraces / calculating shadows / errors) */}
-      {HAS_TOKEN && status && (
+      {/* Loading message — centered + bold (like the night message) so it's not
+          missed if a slow Overpass/data load takes a while */}
+      {HAS_TOKEN && loadingMessage && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-[min(90%,22rem)] pointer-events-none">
+          <div className="rounded-3xl bg-background/95 backdrop-blur px-5 py-4 text-center shadow-lg">
+            <p className="flex items-center justify-center gap-2 font-display text-base font-bold">
+              <Loader2 className="size-5 animate-spin" /> {loadingMessage}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Error pill (top) */}
+      {HAS_TOKEN && errorMessage && (
         <div className="absolute top-[4.5rem] left-1/2 -translate-x-1/2 z-20">
-          {status.tone === "info" ? (
-            <span className="flex items-center gap-2 rounded-full bg-background/95 backdrop-blur px-3 py-1.5 shadow-md text-xs font-medium text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" /> {status.text}
-            </span>
-          ) : (
-            <span className="flex items-center gap-2 rounded-full bg-destructive text-destructive-foreground px-3 py-1.5 shadow-md text-xs font-medium">
-              <AlertTriangle className="size-3.5" /> {status.text}
-            </span>
-          )}
+          <span className="flex items-center gap-2 rounded-full bg-destructive text-destructive-foreground px-3 py-1.5 shadow-md text-xs font-medium">
+            <AlertTriangle className="size-3.5" /> {errorMessage}
+          </span>
+        </div>
+      )}
+
+      {/* Night message — warm + friendly, not an error (Steps 3/4) */}
+      {HAS_TOKEN && sun.isNight && !loadingMessage && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-[min(90%,22rem)] pointer-events-none">
+          <div className="rounded-3xl bg-background/95 backdrop-blur px-5 py-4 text-center shadow-lg">
+            <p className="font-display text-base font-bold">🌙 Esta noche no hay sol</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {sunriseISO ? `El sol sale a las ${hhmm(sunriseISO)}` : "El sol sale por la mañana"}
+            </p>
+          </div>
         </div>
       )}
 
@@ -521,6 +600,11 @@ export function MapView({ when, onEdit }: Props) {
             Buscando tu ubicación...
           </span>
         )}
+        {geoError && !locating && (
+          <span className="max-w-[220px] rounded-2xl bg-foreground text-background text-xs font-medium px-3 py-2 shadow-lg text-right">
+            {geoError}
+          </span>
+        )}
       </div>
 
       {/* Disclaimer — shadows are a calculated estimate, not surveyed truth */}
@@ -570,13 +654,13 @@ export function MapView({ when, onEdit }: Props) {
             {durationText && (
               <p className="mt-1.5 text-xs text-muted-foreground">{durationText}</p>
             )}
-            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{sel.name}</h2>
-            {sel.address && <p className="mt-1 text-sm text-muted-foreground">{sel.address}</p>}
-            {/* ¿Cómo llegar? → Google Maps directions, new tab (Step 6) */}
+            {/* Heading: OSM business name if found, otherwise the street address */}
+            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{osmName ?? sel.name}</h2>
+            {popupSubtitle && <p className="mt-1 text-sm text-muted-foreground">{popupSubtitle}</p>}
+            {/* ¿Cómo llegar? — open Google Maps at the terrace's exact GPS
+                coordinates (most accurate; Maps drops a pin + offers directions). */}
             <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                sel.name + ", " + sel.address + ", Barcelona"
-              )}`}
+              href={`https://www.google.com/maps?q=${sel.lat},${sel.lng}`}
               target="_blank"
               rel="noreferrer"
               className="mt-4 inline-flex items-center gap-1.5 font-display font-semibold text-terracotta hover:text-coral"

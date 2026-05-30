@@ -118,7 +118,32 @@ export function computeTerraceStates(
 ): ShadeResult {
   const indexed = indexBuildings(buildings);
   const result: ShadeResult = {};
-  for (const t of terraces) result[t.id] = isShaded(t, indexed, sun) ? "shade" : "sun";
+
+  // Union bbox of all buildings, expanded by the shadow cap. A terrace outside
+  // it can't be shaded by the loaded buildings, so we skip the per-building
+  // work and mark it sunny — important now that we load the full ~6,900-terrace
+  // dataset but only fetch buildings for the current viewport.
+  let uMinLng = Infinity, uMinLat = Infinity, uMaxLng = -Infinity, uMaxLat = -Infinity;
+  for (const b of indexed) {
+    if (b.minLng < uMinLng) uMinLng = b.minLng;
+    if (b.minLat < uMinLat) uMinLat = b.minLat;
+    if (b.maxLng > uMaxLng) uMaxLng = b.maxLng;
+    if (b.maxLat > uMaxLat) uMaxLat = b.maxLat;
+  }
+  uMinLng -= THRESH_LNG; uMaxLng += THRESH_LNG;
+  uMinLat -= THRESH_LAT; uMaxLat += THRESH_LAT;
+
+  for (const t of terraces) {
+    if (
+      indexed.length === 0 ||
+      t.lng < uMinLng || t.lng > uMaxLng || t.lat < uMinLat || t.lat > uMaxLat
+    ) {
+      result[t.id] = "sun"; // no buildings within reach → sunny
+      continue;
+    }
+    result[t.id] = isShaded(t, indexed, sun) ? "shade" : "sun";
+  }
+
   return result;
 }
 

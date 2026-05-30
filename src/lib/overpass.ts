@@ -1,13 +1,12 @@
 /* ════════════════════════════════════════════════════════════════════════
  * [BUILDINGS] — OpenStreetMap building footprints via Overpass (Step 4)
  * ────────────────────────────────────────────────────────────────────────
- * Fetches building polygons (with a height in metres) for a map bounding box.
- * Heights come from OSM tags; buildings with no height/levels tags fall back
- * to a Barcelona-median default. The shadow maths lives in src/lib/shadow.ts.
+ * Fetches building polygons (with a height in metres) for a map bounding box,
+ * for the shadow calculation. (Business names come from Barcelona open data —
+ * see src/lib/census.ts — not from OSM.)
  *
- * Overpass is a free public API — it can be slow or rate-limit (429/504). To
- * stay resilient we retry with exponential backoff AND rotate across public
- * mirrors, so a single overloaded server doesn't break the shadow feature.
+ * Overpass is a free public API — it can be slow or rate-limit (429/5xx), so
+ * requests retry with exponential backoff AND rotate across public mirrors.
  * CORS is allowed on these endpoints, so we fetch from the browser directly.
  * ════════════════════════════════════════════════════════════════════════ */
 
@@ -28,7 +27,34 @@ export type BBox = { south: number; west: number; north: number; east: number };
 /** A building footprint Turf can intersect, carrying its height in metres. */
 export type BuildingFeature = GeoJSON.Feature<GeoJSON.Polygon, { height: number }>;
 
+// Minimal shape of an Overpass element (the bits we read).
+type OverpassElement = {
+  type: string;
+  id: number;
+  tags?: Record<string, string>;
+  geometry?: Array<{ lat: number; lon: number }>;
+};
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Shared Overpass POST: retries with backoff, rotating across mirrors. */
+async function overpassRequest(query: string): Promise<{ elements?: OverpassElement[] }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
+    try {
+      const res = await fetch(endpoint, { method: "POST", body: "data=" + encodeURIComponent(query) });
+      // Overpass signals overload with these — retryable on another mirror.
+      if ([429, 502, 503, 504].includes(res.status)) throw new Error(`Overpass busy (${res.status})`);
+      if (!res.ok) throw new Error(`Overpass responded ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(BASE_BACKOFF_MS * 2 ** attempt + Math.random() * 250);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Overpass: all attempts failed");
+}
 
 /** Pull a height in metres from OSM tags, falling back to the default. */
 function parseHeight(tags: Record<string, string> = {}): number {
@@ -44,8 +70,18 @@ function parseHeight(tags: Record<string, string> = {}): number {
   return DEFAULT_BUILDING_HEIGHT_M;
 }
 
-/** Turn an Overpass JSON response into building polygons with heights. */
-function parseBuildings(json: { elements?: Array<{ type: string; id: number; tags?: Record<string, string>; geometry?: Array<{ lat: number; lon: number }> }> }): BuildingFeature[] {
+/**
+ * Fetch building footprints within `bbox`, with a height in metres each.
+ * Throws only if every retry/mirror fails.
+ */
+export async function fetchBuildings(bbox: BBox): Promise<BuildingFeature[]> {
+  // Only `way` buildings (the vast majority); relations are skipped for speed.
+  const query =
+    `[out:json][timeout:25];` +
+    `way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});` +
+    `out geom;`;
+
+  const json = await overpassRequest(query);
   const features: BuildingFeature[] = [];
 
   for (const el of json.elements ?? []) {
@@ -67,44 +103,4 @@ function parseBuildings(json: { elements?: Array<{ type: string; id: number; tag
   }
 
   return features;
-}
-
-/**
- * Fetch building footprints within `bbox`. Retries with exponential backoff,
- * rotating across Overpass mirrors. Throws only if every attempt fails.
- */
-export async function fetchBuildings(bbox: BBox): Promise<BuildingFeature[]> {
-  // Only `way` buildings (the vast majority); relations are skipped for speed.
-  const query =
-    `[out:json][timeout:25];` +
-    `way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});` +
-    `out geom;`;
-
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        body: "data=" + encodeURIComponent(query),
-      });
-
-      // Overpass signals overload with these — retryable on another server.
-      if ([429, 502, 503, 504].includes(res.status)) {
-        throw new Error(`Overpass busy (${res.status})`);
-      }
-      if (!res.ok) throw new Error(`Overpass responded ${res.status}`);
-
-      return parseBuildings(await res.json());
-    } catch (err) {
-      lastError = err;
-      // Back off (with jitter) before the next mirror, unless that was the last try.
-      if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(BASE_BACKOFF_MS * 2 ** attempt + Math.random() * 250);
-      }
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error("Overpass: all attempts failed");
 }

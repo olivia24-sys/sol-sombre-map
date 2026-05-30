@@ -34,7 +34,10 @@ function Index() {
   }, [when]);
 
   const handleEdit = () => {
-    heroRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll to the date/time CTA (Section 2 inside Hero), not the hero top.
+    const sections = heroRef.current?.querySelectorAll("section");
+    const target = sections && sections.length > 1 ? sections[1] : heroRef.current;
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
