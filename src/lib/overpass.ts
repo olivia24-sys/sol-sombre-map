@@ -10,13 +10,21 @@
  * CORS is allowed on these endpoints, so we fetch from the browser directly.
  * ════════════════════════════════════════════════════════════════════════ */
 
-// Public Overpass mirrors (all CORS-enabled). We rotate through them on retry.
+// Public Overpass mirrors (CORS-enabled). We rotate through them on retry so a
+// rate-limited or unresponsive mirror falls through to the next one.
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
 ];
 const MAX_ATTEMPTS = 3; // total tries across endpoints
 const BASE_BACKOFF_MS = 600; // exponential backoff: ~600ms, ~1200ms, …
+// Per-attempt hard cap. Public mirrors sometimes accept the connection but never
+// respond (kumi.systems was observed hanging indefinitely), and fetch() has no
+// built-in timeout — so without this a single dead mirror hangs the whole shadow
+// calculation forever ("Calculando sombras…" never resolves). 15s comfortably
+// covers a healthy mirror for our viewport-sized queries while letting the retry
+// loop rotate off a stalled one.
+const REQUEST_TIMEOUT_MS = 15_000;
 
 const LEVEL_HEIGHT_M = 3; // metres per floor when only building:levels is known
 const DEFAULT_BUILDING_HEIGHT_M = 15; // Barcelona median (Eixample-ish)
@@ -37,20 +45,33 @@ type OverpassElement = {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Shared Overpass POST: retries with backoff, rotating across mirrors. */
+/** Shared Overpass POST: retries with backoff, rotating across mirrors. Each
+ *  attempt is bounded by REQUEST_TIMEOUT_MS so a hung mirror can't stall forever. */
 async function overpassRequest(query: string): Promise<{ elements?: OverpassElement[] }> {
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const res = await fetch(endpoint, { method: "POST", body: "data=" + encodeURIComponent(query) });
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query),
+        signal: controller.signal,
+      });
       // Overpass signals overload with these — retryable on another mirror.
       if ([429, 502, 503, 504].includes(res.status)) throw new Error(`Overpass busy (${res.status})`);
       if (!res.ok) throw new Error(`Overpass responded ${res.status}`);
       return await res.json();
     } catch (err) {
-      lastError = err;
+      // An abort here is our own timeout firing — turn it into a clear, retryable error.
+      lastError = controller.signal.aborted
+        ? new Error(`Overpass timed out after ${REQUEST_TIMEOUT_MS}ms (${endpoint})`)
+        : err;
       if (attempt < MAX_ATTEMPTS - 1) await sleep(BASE_BACKOFF_MS * 2 ** attempt + Math.random() * 250);
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Overpass: all attempts failed");

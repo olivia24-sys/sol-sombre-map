@@ -220,6 +220,13 @@ export function MapView({ when, onEdit }: Props) {
         setDurationInfo(msg.ok && msg.result ? (msg.result as DurationResult) : null);
       }
     };
+    // Without this, a worker that fails to load or throws at the top level would
+    // leave the UI stuck on "Calculando sombras…" forever (onmessage never fires).
+    // Surface it as an error instead.
+    worker.onerror = (event) => {
+      console.error("Shadow worker error:", event.message || event);
+      setShadowStatus("error");
+    };
     return () => {
       worker.terminate();
       workerRef.current = null;
