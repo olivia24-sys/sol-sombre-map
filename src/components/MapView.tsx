@@ -122,6 +122,7 @@ export function MapView({ when, onEdit }: Props) {
   const workerRef = useRef<Worker | null>(null);
   const buildingsRef = useRef<BuildingFeature[]>([]);
   const buildingsBoundsRef = useRef<BBox | null>(null);
+  const fetchAbortRef = useRef<AbortController | null>(null); // cancels a stale buildings fetch when the view changes
   const latestStatesReqRef = useRef(0); // dedupe Step 4 "states" results
   const latestDurationReqRef = useRef(0); // dedupe Step 5 "duration" results
   const moveTimerRef = useRef<number | undefined>(undefined);
@@ -186,19 +187,32 @@ export function MapView({ when, onEdit }: Props) {
       });
     };
 
+    // The view changed, so any in-flight buildings fetch is now stale — abort it
+    // before doing anything else. Overpass rate-limits per IP (~4 slots), so
+    // leaving superseded requests running is what trips the limit when panning.
+    fetchAbortRef.current?.abort();
+
     if (bboxContains(buildingsBoundsRef.current, view)) {
-      post(buildingsRef.current); // reuse cache (small pan / time change)
-    } else {
-      const padded = padBBox(view, 0.2);
-      setShadowStatus("loading");
-      fetchBuildings(padded)
-        .then((blds) => {
-          buildingsRef.current = blds;
-          buildingsBoundsRef.current = padded;
-          post(blds);
-        })
-        .catch(() => setShadowStatus("error"));
+      post(buildingsRef.current); // reuse cache (small pan / time change) — no fetch needed
+      return;
     }
+
+    const padded = padBBox(view, 0.2);
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+    setShadowStatus("loading");
+    fetchBuildings(padded, controller.signal)
+      .then((blds) => {
+        if (controller.signal.aborted) return; // superseded by a newer view — drop it
+        buildingsRef.current = blds;
+        buildingsBoundsRef.current = padded;
+        post(blds);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return; // aborted because the user moved on — not an error
+        console.error("Overpass buildings fetch failed:", err);
+        setShadowStatus("error");
+      });
   };
 
   // Create the worker once (client-only; Vite bundles the worker from the URL).
@@ -230,6 +244,7 @@ export function MapView({ when, onEdit }: Props) {
     return () => {
       worker.terminate();
       workerRef.current = null;
+      fetchAbortRef.current?.abort(); // cancel any in-flight buildings fetch on unmount
     };
   }, []);
 

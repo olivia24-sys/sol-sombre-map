@@ -10,13 +10,17 @@
  * CORS is allowed on these endpoints, so we fetch from the browser directly.
  * ════════════════════════════════════════════════════════════════════════ */
 
-// Public Overpass mirrors (CORS-enabled). We rotate through them on retry so a
-// rate-limited or unresponsive mirror falls through to the next one.
+// Public Overpass mirrors — all with GLOBAL coverage + CORS. We rotate through
+// them per attempt so a rate-limited or unresponsive mirror falls through to the
+// next. NOTE: regional instances (e.g. overpass.osm.ch) are deliberately excluded
+// — they host only their own country's data and return zero buildings for
+// Barcelona, which would silently mark every terrace as "sun".
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
 ];
-const MAX_ATTEMPTS = 3; // total tries across endpoints
+const MAX_ATTEMPTS = 4; // total tries across endpoints (primary mirror gets a 2nd try)
 const BASE_BACKOFF_MS = 600; // exponential backoff: ~600ms, ~1200ms, …
 // Per-attempt hard cap. Public mirrors sometimes accept the connection but never
 // respond (kumi.systems was observed hanging indefinitely), and fetch() has no
@@ -46,13 +50,23 @@ type OverpassElement = {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Shared Overpass POST: retries with backoff, rotating across mirrors. Each
- *  attempt is bounded by REQUEST_TIMEOUT_MS so a hung mirror can't stall forever. */
-async function overpassRequest(query: string): Promise<{ elements?: OverpassElement[] }> {
+ *  attempt is bounded by REQUEST_TIMEOUT_MS so a hung mirror can't stall forever.
+ *  An optional `signal` lets the caller cancel a now-stale request (e.g. the user
+ *  panned the map); when it fires we bail immediately without burning more mirror
+ *  slots — important because Overpass rate-limits per IP. */
+async function overpassRequest(
+  query: string,
+  signal?: AbortSignal
+): Promise<{ elements?: OverpassElement[] }> {
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new DOMException("Overpass request superseded", "AbortError");
     const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // Relay the caller's abort to this attempt's controller.
+    const relayAbort = () => controller.abort();
+    signal?.addEventListener("abort", relayAbort, { once: true });
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -65,13 +79,16 @@ async function overpassRequest(query: string): Promise<{ elements?: OverpassElem
       if (!res.ok) throw new Error(`Overpass responded ${res.status}`);
       return await res.json();
     } catch (err) {
-      // An abort here is our own timeout firing — turn it into a clear, retryable error.
+      // Caller aborted (stale request) → stop entirely; don't waste more slots.
+      if (signal?.aborted) throw new DOMException("Overpass request superseded", "AbortError");
+      // Otherwise an abort here is our own timeout firing — a clear, retryable error.
       lastError = controller.signal.aborted
         ? new Error(`Overpass timed out after ${REQUEST_TIMEOUT_MS}ms (${endpoint})`)
         : err;
       if (attempt < MAX_ATTEMPTS - 1) await sleep(BASE_BACKOFF_MS * 2 ** attempt + Math.random() * 250);
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", relayAbort);
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Overpass: all attempts failed");
@@ -93,16 +110,16 @@ function parseHeight(tags: Record<string, string> = {}): number {
 
 /**
  * Fetch building footprints within `bbox`, with a height in metres each.
- * Throws only if every retry/mirror fails.
+ * Throws only if every retry/mirror fails (or if `signal` aborts the request).
  */
-export async function fetchBuildings(bbox: BBox): Promise<BuildingFeature[]> {
+export async function fetchBuildings(bbox: BBox, signal?: AbortSignal): Promise<BuildingFeature[]> {
   // Only `way` buildings (the vast majority); relations are skipped for speed.
   const query =
     `[out:json][timeout:25];` +
     `way["building"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});` +
     `out geom;`;
 
-  const json = await overpassRequest(query);
+  const json = await overpassRequest(query, signal);
   const features: BuildingFeature[] = [];
 
   for (const el of json.elements ?? []) {
