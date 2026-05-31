@@ -31,7 +31,10 @@ import type { ShadeResult, DurationResult } from "@/lib/shadow";
 /* ═══ [MAP CONFIG] ═══════════════════════════════════════════════════════ */
 
 const BCN = { lng: 2.1734, lat: 41.3851 }; // Barcelona centre
-const DEFAULT_ZOOM = 14;
+// Open zoomed into a neighbourhood, not the whole city: shadow calc needs OSM
+// buildings for the viewport, and a city-wide box is tens of thousands of
+// buildings (too slow / rejected by the proxy). 16 ≈ a few blocks of dense Eixample.
+const DEFAULT_ZOOM = 16;
 const MAP_STYLE = "mapbox://styles/mapbox/light-v11"; // clean + minimal
 
 // Dot colours mirror the --dot-sun / --dot-shade design tokens (styles.css).
