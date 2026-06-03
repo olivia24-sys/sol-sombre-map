@@ -36,3 +36,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local Claude Code agent config & skills — keep local, not in the shared repo
+.claude/
