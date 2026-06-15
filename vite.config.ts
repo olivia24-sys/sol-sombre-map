@@ -19,6 +19,14 @@ const vercelNitro = process.env.VERCEL
   ? {
       nitro: {
         preset: "vercel",
+        // Raise the serverless function timeout to the Hobby-tier maximum (60s).
+        // The default is ~10s, which silently killed the buildings (Overpass)
+        // server function mid-request whenever a public mirror was slow — that
+        // platform-level timeout was the main cause of "Sombras no disponibles".
+        // Overpass's own per-attempt/retry budget now fits inside this window.
+        vercel: {
+          functions: { maxDuration: 60 },
+        },
         // The Lovable preset otherwise forces Nitro's output into dist/. Restore the
         // exact paths the `vercel` preset expects so Vercel detects .vercel/output.
         output: {

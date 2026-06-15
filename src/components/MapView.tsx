@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
-import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Moon, Plus, Minus, LocateFixed, Loader2, AlertTriangle } from "lucide-react";
+import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Moon, Plus, Minus, LocateFixed, Loader2, AlertTriangle, RotateCw } from "lucide-react";
 import type { Map as MapboxMap, Marker as MapboxMarker, GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { fetchTerraces, terracesToGeoJSON, type Terrace, type TerraceState } from "@/lib/terraces";
+import { fetchTerraces, terracesToGeoJSON, readPersistedTerraces, TERRACES_DATA_VERSION, TERRACES_BACKSTOP_MS, type Terrace, type TerraceState } from "@/lib/terraces";
 import { getSunPosition, getNextSunriseISO } from "@/lib/sun";
 import { fetchBuildings, type BBox, type BuildingFeature } from "@/lib/overpass";
 import { fetchBusinessName } from "@/lib/census";
@@ -51,6 +51,17 @@ const LAYER_ID = "terraces-dots";
 
 // How long to wait after the user stops panning before recalculating.
 const MOVE_DEBOUNCE_MS = 500;
+
+// Client-side ceiling on the buildings (Overpass) fetch. If it hasn't returned
+// by now we stop blocking the UI and show the degraded state — the map + pins
+// stay fully usable. The server keeps going and warms its cache, so a manual
+// "Reintentar" usually resolves instantly. Sized just above the server's
+// two-mirror budget (~19s, see overpass.ts) so a healthy fallback mirror still
+// lands in time.
+const CLIENT_BUILDINGS_TIMEOUT_MS = 21_000;
+
+// Stable empty reference so an un-loaded query doesn't churn effect deps.
+const EMPTY_TERRACES: Terrace[] = [];
 
 /* ═══ helpers ════════════════════════════════════════════════════════════ */
 
@@ -100,6 +111,11 @@ function bboxContains(outer: BBox | null, inner: BBox): boolean {
   return outer.south <= inner.south && outer.west <= inner.west && outer.north >= inner.north && outer.east >= inner.east;
 }
 
+// Stable key for a bbox — used to cache shadow results per viewport + time slot.
+function bboxKey(b: BBox): string {
+  return `${b.south.toFixed(4)},${b.west.toFixed(4)},${b.north.toFixed(4)},${b.east.toFixed(4)}`;
+}
+
 type Props = {
   when: Date;
   onEdit: () => void;
@@ -130,17 +146,35 @@ export function MapView({ when, onEdit }: Props) {
   const latestDurationReqRef = useRef(0); // dedupe Step 5 "duration" results
   const moveTimerRef = useRef<number | undefined>(undefined);
   const recalcRef = useRef<() => void>(() => {});
+  const postStatesRef = useRef<() => void>(() => {});
+  // Session cache of worker results, keyed by viewport + chosen time, so toggling
+  // back to a previously-seen time slot repaints instantly (no worker round-trip).
+  const statesCacheRef = useRef<Map<string, ShadeResult>>(new Map());
+  // Which cache key each in-flight worker "states" request will populate on return.
+  const pendingStatesKeyRef = useRef<Map<number, string>>(new Map());
 
   /* ═══ [TERRACE DATA] ═══════════════════════════════════════════════════
    * Fetch the real terraces once (cached by React Query). See lib/terraces.ts.
    * ──────────────────────────────────────────────────────────────────── */
+  // Seed from localStorage, but only if it's the SAME dataset edition we're built
+  // against (version match) — a cache from an older edition is ignored so it can't
+  // pin stale data. While the version matches, repeat visits paint instantly and
+  // skip the network entirely; the version is also in the query key, so a new
+  // edition becomes a fresh query → refetch. Read once on mount.
+  const persistedTerraces = useMemo(() => {
+    const p = readPersistedTerraces();
+    return p && p.version === TERRACES_DATA_VERSION ? p : null;
+  }, []);
   const terracesQuery = useQuery({
-    queryKey: ["terraces"],
+    queryKey: ["terraces", TERRACES_DATA_VERSION],
     queryFn: () => fetchTerraces(),
-    staleTime: Infinity,
+    staleTime: TERRACES_BACKSTOP_MS,
+    gcTime: Infinity,
     retry: 1,
+    initialData: persistedTerraces?.terraces,
+    initialDataUpdatedAt: persistedTerraces?.at,
   });
-  const terraces = terracesQuery.data ?? [];
+  const terraces = terracesQuery.data ?? EMPTY_TERRACES;
 
   /* ═══ [BUSINESS NAME] — Barcelona commercial census ════════════════════
    * On selection, look up the business at the terrace's address in the city's
@@ -163,56 +197,98 @@ export function MapView({ when, onEdit }: Props) {
   const sun = useMemo(() => getSunPosition(when), [when]);
 
   /* ═══ [SHADOW ENGINE] — Step 4 ═════════════════════════════════════════
-   * recalcShadows: fetch buildings for the viewport (cached; refetched only
-   * when the view leaves the cached box) and hand terraces + buildings + sun
-   * to the Web Worker. Kept in a ref so the (once-registered) `moveend`
-   * listener always calls the latest version (current sun/terraces).
+   * Split in two so the buildings fetch (which needs only the viewport) runs in
+   * PARALLEL with the terrace load instead of waiting behind it:
+   *   recalcRef     — ensure buildings for the viewport (cached; refetched only
+   *                   when the view leaves the cached box), then compute.
+   *   postStatesRef — hand terraces + buildings + sun to the Web Worker once
+   *                   both are in hand; reuses the session cache for a repeat slot.
+   * Both live in refs so the (once-registered) `moveend` listener and the fetch
+   * callbacks always call the latest version (current sun/terraces/when).
    * ──────────────────────────────────────────────────────────────────── */
+  // postStatesRef — hand terraces + buildings + sun to the worker. Runs as soon
+  // as BOTH the terraces and the viewport's buildings are in hand (whichever
+  // finishes last calls this), and short-circuits to the session cache when the
+  // same viewport + time slot was computed earlier this session.
+  postStatesRef.current = () => {
+    const map = mapRef.current;
+    const worker = workerRef.current;
+    if (!map || !worker || !mapReady || sun.isNight) return;
+    if (terraces.length === 0) return; // terraces not loaded yet — the buildings fetch will call us back
+    const bounds = buildingsBoundsRef.current;
+    if (!bounds) return; // buildings not loaded yet — their fetch callback will call us back
+
+    const mb = map.getBounds();
+    if (!mb) return;
+    const view: BBox = { south: mb.getSouth(), west: mb.getWest(), north: mb.getNorth(), east: mb.getEast() };
+    if (!bboxContains(bounds, view)) return; // view moved past the cached buildings — a fresh fetch is in flight
+
+    // Session cache: same buildings + same chosen time → reuse the worker result.
+    const key = `${bboxKey(bounds)}@${when.toISOString()}`;
+    const cached = statesCacheRef.current.get(key);
+    if (cached) {
+      setShadeStates(cached);
+      setShadowStatus("ready");
+      return;
+    }
+
+    const requestId = ++latestStatesReqRef.current;
+    pendingStatesKeyRef.current.set(requestId, key);
+    setShadowStatus("calculating");
+    worker.postMessage({
+      type: "states",
+      requestId,
+      terraces: terraces.map((t) => ({ id: t.id, lng: t.lng, lat: t.lat })),
+      buildings: buildingsRef.current,
+      sun: { altitudeRad: sun.altitudeRad, bearingFromNorthDeg: sun.bearingFromNorthDeg },
+    });
+  };
+
+  // recalcRef — ensure we have OSM buildings for the viewport, then compute.
+  // Depends ONLY on the map view, so it starts the instant the map is ready and
+  // overlaps the terrace load instead of waiting behind it.
   recalcRef.current = () => {
     const map = mapRef.current;
     const worker = workerRef.current;
-    if (!map || !worker || !mapReady) return;
-    if (sun.isNight || terraces.length === 0) return; // night → handled by [DATA SYNC]
+    if (!map || !worker || !mapReady || sun.isNight) return; // night → handled by [DATA SYNC]
 
     const mb = map.getBounds();
     if (!mb) return;
     const view: BBox = { south: mb.getSouth(), west: mb.getWest(), north: mb.getNorth(), east: mb.getEast() };
 
-    const post = (buildings: BuildingFeature[]) => {
-      const requestId = ++latestStatesReqRef.current;
-      setShadowStatus("calculating");
-      worker.postMessage({
-        type: "states",
-        requestId,
-        terraces: terraces.map((t) => ({ id: t.id, lng: t.lng, lat: t.lat })),
-        buildings,
-        sun: { altitudeRad: sun.altitudeRad, bearingFromNorthDeg: sun.bearingFromNorthDeg },
-      });
-    };
-
-    // The view changed, so any in-flight buildings fetch is now stale — abort it
-    // before doing anything else. Overpass rate-limits per IP (~4 slots), so
-    // leaving superseded requests running is what trips the limit when panning.
-    fetchAbortRef.current?.abort();
-
+    // Already have buildings covering this view (small pan / time change) → no
+    // fetch needed, just (re)compute. Cheap and cache-aware.
     if (bboxContains(buildingsBoundsRef.current, view)) {
-      post(buildingsRef.current); // reuse cache (small pan / time change) — no fetch needed
+      postStatesRef.current();
       return;
     }
+
+    // Otherwise fetch buildings for the view. The view changed, so any in-flight
+    // fetch is now stale — abort it first (Overpass rate-limits ~4 slots/IP;
+    // leaving superseded requests running is what trips the limit when panning).
+    fetchAbortRef.current?.abort();
 
     const padded = padBBox(view, 0.2);
     const controller = new AbortController();
     fetchAbortRef.current = controller;
+    // Stop blocking the UI if the fetch runs long; the map + pins stay usable and
+    // the server keeps going to warm its cache for a "Reintentar".
+    const timer = window.setTimeout(() => {
+      controller.abort();
+      setShadowStatus("error");
+    }, CLIENT_BUILDINGS_TIMEOUT_MS);
     setShadowStatus("loading");
     fetchBuildings(padded, controller.signal)
       .then((blds) => {
-        if (controller.signal.aborted) return; // superseded by a newer view — drop it
+        window.clearTimeout(timer);
+        if (controller.signal.aborted) return; // superseded by a newer view (or timed out) — drop it
         buildingsRef.current = blds;
         buildingsBoundsRef.current = padded;
-        post(blds);
+        postStatesRef.current();
       })
       .catch((err) => {
-        if (controller.signal.aborted) return; // aborted because the user moved on — not an error
+        window.clearTimeout(timer);
+        if (controller.signal.aborted) return; // aborted on pan or timeout — already handled
         console.error("Overpass buildings fetch failed:", err);
         setShadowStatus("error");
       });
@@ -225,11 +301,18 @@ export function MapView({ when, onEdit }: Props) {
     worker.onmessage = (e: MessageEvent<{ type: "states" | "duration"; requestId: number; ok: boolean; result?: ShadeResult | DurationResult }>) => {
       const msg = e.data;
       if (msg.type === "states") {
-        if (msg.requestId !== latestStatesReqRef.current) return; // ignore stale
+        // Record the result under its viewport+time key even if it's now stale —
+        // it's still a valid answer for that slot, so a revisit reuses it.
+        const key = pendingStatesKeyRef.current.get(msg.requestId);
+        pendingStatesKeyRef.current.delete(msg.requestId);
         if (msg.ok && msg.result) {
-          setShadeStates(msg.result as ShadeResult);
-          setShadowStatus("ready");
-        } else {
+          const result = msg.result as ShadeResult;
+          if (key) statesCacheRef.current.set(key, result);
+          if (msg.requestId === latestStatesReqRef.current) {
+            setShadeStates(result);
+            setShadowStatus("ready");
+          }
+        } else if (msg.requestId === latestStatesReqRef.current) {
           setShadowStatus("error");
         }
       } else if (msg.type === "duration") {
@@ -251,8 +334,8 @@ export function MapView({ when, onEdit }: Props) {
     };
   }, []);
 
-  // Recompute when the data, map, or time changes. Night clears everything;
-  // otherwise dots go grey ("calculando") until the worker returns.
+  // Buildings load as soon as the map is ready — in PARALLEL with the terrace
+  // fetch, not behind it — and recompute on every time change. Night clears all.
   useEffect(() => {
     if (!mapReady) return;
     if (sun.isNight) {
@@ -260,9 +343,18 @@ export function MapView({ when, onEdit }: Props) {
       setShadowStatus("idle");
       return;
     }
-    setShadeStates({});
     recalcRef.current();
-  }, [terraces, mapReady, sun]);
+  }, [mapReady, sun]);
+
+  // When the terrace list arrives (or the dataset changes), compute using the
+  // buildings the effect above is already fetching/has fetched — without
+  // restarting that fetch. Previous dot colours stay until the new result
+  // streams in, so there's no grey flash on a time change.
+  useEffect(() => {
+    if (!mapReady || sun.isNight || terraces.length === 0) return;
+    statesCacheRef.current.clear(); // terrace set changed → any stored results are stale
+    postStatesRef.current();
+  }, [terraces]);
 
   // Sunrise time for the night message ("El sol sale a las 07:23").
   const sunriseISO = useMemo(() => (sun.isNight ? getNextSunriseISO(when) : null), [sun, when]);
@@ -515,6 +607,18 @@ export function MapView({ when, onEdit }: Props) {
       ? "Sombras no disponibles"
       : null;
 
+  // Both failures are recoverable, so offer a one-tap retry rather than a dead
+  // end. Terraces re-run React Query's fetch; shadows clear the error and refetch
+  // the buildings (the server may have warmed its cache by now → instant).
+  const onRetry = terracesQuery.isError
+    ? () => void terracesQuery.refetch()
+    : !sun.isNight && shadowStatus === "error"
+      ? () => {
+          setShadowStatus("idle");
+          recalcRef.current();
+        }
+      : null;
+
   return (
     <section className="relative w-full h-screen overflow-hidden bg-muted">
       {/* Real Mapbox canvas mounts here (replaces the old fake SVG map).
@@ -550,11 +654,20 @@ export function MapView({ when, onEdit }: Props) {
         </div>
       )}
 
-      {/* Error pill (top) */}
+      {/* Error pill (top) — degraded, not blocking: the map + pins stay usable
+          and a tap retries. */}
       {HAS_TOKEN && errorMessage && (
         <div className="absolute top-[4.5rem] left-1/2 -translate-x-1/2 z-20">
           <span className="flex items-center gap-2 rounded-full bg-destructive text-destructive-foreground px-3 py-1.5 shadow-md text-xs font-medium">
             <AlertTriangle className="size-3.5" /> {errorMessage}
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="ml-1 inline-flex items-center gap-1 rounded-full bg-background/20 hover:bg-background/30 px-2 py-0.5 font-display font-semibold transition-colors"
+              >
+                <RotateCw className="size-3" /> Reintentar
+              </button>
+            )}
           </span>
         </div>
       )}

@@ -40,9 +40,15 @@ const MAX_ATTEMPTS = 4; // total tries across endpoints (primary mirror gets a 2
 const BASE_BACKOFF_MS = 600; // exponential backoff: ~600ms, ~1200ms, …
 // Per-attempt hard cap. Public mirrors sometimes accept the connection but never
 // respond, and fetch() has no built-in timeout — so without this a single dead
-// mirror would stall the request. Server-side we can afford a bit longer since a
-// neighbourhood query returns more buildings; the client aborts on pan anyway.
-const REQUEST_TIMEOUT_MS = 18_000;
+// mirror would stall the request.
+//
+// Sized to the platform budget: the Vercel function is capped at 60s (see
+// vite.config.ts maxDuration), so 4 attempts × 9s + backoff (~50s) stays safely
+// inside it AND lets a dead first mirror fall through to a healthy second one
+// within ~19s — before the client's own ~21s timeout (see MapView). At 18s the
+// second mirror never even got a turn before the client gave up, so a single
+// slow primary mirror failed every time. The client aborts on pan regardless.
+const REQUEST_TIMEOUT_MS = 9_000;
 // Overpass etiquette asks for a descriptive UA; it also avoids the bot-block that
 // generic browser User-Agents hit on overpass-api.de.
 const USER_AGENT = "HaySol/1.0 (https://sol-sombre-map.vercel.app; Barcelona terrace sun/shade finder)";
