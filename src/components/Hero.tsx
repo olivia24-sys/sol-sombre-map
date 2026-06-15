@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Calendar, Clock } from "lucide-react";
-import { motion } from "motion/react";
+import { animate, motion, useMotionTemplate, useMotionValue } from "motion/react";
 import bottle from "@/assets/bottle.png";
 import canya from "@/assets/canya.png";
 import vermut from "@/assets/vermut.png";
@@ -29,6 +29,27 @@ export function Hero({ onSubmit }: Props) {
   const [time, setTime] = useState(nowStr());
   const heroRef = useRef<HTMLDivElement>(null);
 
+  // Sun arc — drive a single JS animation loop and feed motion values so the
+  // sun interpolates smoothly along the parametric curve instead of triggering
+  // a layout recalc at every keyframe.
+  const sunX = useMotionValue(8);
+  const sunY = useMotionValue(78);
+  const sunLeft = useMotionTemplate`${sunX}vw`;
+  const sunTop = useMotionTemplate`${sunY}vh`;
+
+  useEffect(() => {
+    const controls = animate(0, 1, {
+      duration: 4,
+      ease: "linear",
+      onUpdate(t) {
+        const a = t * Math.PI;
+        sunX.set(45 - 37 * Math.cos(a));
+        sunY.set(78 - (60 * a) / Math.PI - 35 * Math.sin(a));
+      },
+    });
+    return () => controls.stop();
+  }, []);
+
   return (
     <div ref={heroRef} className="relative bg-sun text-foreground overflow-hidden">
       {/* SECTION 1 — hero */}
@@ -39,18 +60,15 @@ export function Hero({ onSubmit }: Props) {
           alt=""
           aria-hidden
           className="absolute z-0 pointer-events-none w-20 sm:w-24 md:w-28 aspect-square"
-          style={{ marginLeft: "-3rem", marginTop: "-3rem" }}
-          initial={{ left: "8vw", top: "78vh", opacity: 0, rotate: 0 }}
+          style={{ marginLeft: "-3rem", marginTop: "-3rem", left: sunLeft, top: sunTop }}
+          initial={{ opacity: 0, rotate: 0 }}
           animate={{
-            // Half-circle arc sampled at 9 points (cos/sin from 180° → 0°)
-            left: ["8vw", "13vw", "26vw", "44vw", "50vw", "56vw", "74vw", "85vw", "82vw"],
-            top: ["78vh", "47vh", "22vh", "10vh", "8vh", "10vh", "16vh", "17vh", "18vh"],
             opacity: [0, 1, 1, 1, 1, 1, 1, 1, 1],
             rotate: 360,
           }}
           transition={{
-            duration: 2.5,
-            ease: "easeInOut",
+            duration: 4,
+            ease: "linear",
             opacity: { duration: 0.4 },
           }}
         />

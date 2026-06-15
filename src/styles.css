@@ -100,14 +100,26 @@
 .float { animation: float-slow 6s ease-in-out infinite; }
 .spin-slow { animation: spin-slow 40s linear infinite; }
 
-/* Mock map background */
-.mock-map {
-  background-color: #e9e2d0;
-  background-image:
-    linear-gradient(115deg, transparent 48%, #c9beaa 48%, #c9beaa 50%, transparent 50%),
-    linear-gradient(25deg, transparent 60%, #d6cbb6 60%, #d6cbb6 62%, transparent 62%),
-    linear-gradient(75deg, transparent 30%, #b9d4e8 30%, #b9d4e8 33%, transparent 33%),
-    radial-gradient(circle at 30% 70%, #cfe4c8 0, #cfe4c8 8%, transparent 9%),
-    radial-gradient(circle at 70% 30%, #cfe4c8 0, #cfe4c8 6%, transparent 7%);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+/* ── Map: user-location marker (geolocate button, Step 6) ──
+   Blue dot with a white ring + a soft pulsing halo, dropped where the
+   browser geolocates the user. Class is applied in MapView's handleGeolocate. */
+.haysol-user-dot {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #3b82f6; /* blue-500 */
+  box-shadow: 0 0 0 4px var(--color-background), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.haysol-user-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #3b82f6;
+  opacity: 0.45;
+  animation: haysol-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes haysol-ping {
+  75%, 100% { transform: scale(2.4); opacity: 0; }
 }

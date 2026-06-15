@@ -14,7 +14,13 @@ dist-ssr
 .vinxi
 .tanstack/**
 .nitro
+.vercel
 *.local
+
+# Local env files (contain the Mapbox token — keep out of git)
+.env
+.env.*
+!.env.example
 
 # Wrangler / Cloudflare
 .wrangler/
@@ -30,3 +36,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local Claude Code agent config & skills — keep local, not in the shared repo
+.claude/
