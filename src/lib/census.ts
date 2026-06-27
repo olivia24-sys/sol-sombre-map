@@ -5,7 +5,10 @@
  * city's ground-floor commercial census DOES: field `Nom_Local` (e.g. "BAR
  * RESTAURANTE GAUDÍ"), with street, house number and coordinates. We join a
  * terrace to its business by ADDRESS (street + number) near the terrace point,
- * preferring food/drink premises. 100% Barcelona open data — no OSM.
+ * restricted to VERIFIED food/drink premises (a terrace is always a food/drink
+ * venue — never a nail salon, phone shop, etc.). This is the census name source;
+ * the matcher in src/lib/terrace-name.ts combines it with an offline
+ * OpenStreetMap food/drink layer (src/lib/osm-names.ts).
  *
  * Dataset: cens-locals-planta-baixa-act-economica (≈44k premises). We query it
  * with a coordinate bounding box via CKAN's SQL endpoint (CORS-enabled).
@@ -15,7 +18,14 @@ const CENSUS_RESOURCE_ID = "38babeec-5c47-43d3-84e7-b13a4b89004f"; // 2024 censu
 const SQL_ENDPOINT = "https://opendata-ajuntament.barcelona.cat/data/api/3/action/datastore_search_sql";
 
 // Activity names (Nom_Activitat) that mean "you could sit at a terrace here".
-const FOOD_DRINK_RE = /\b(bars?|restaurant|cibercaf|cafeteri|menjar|tapes|degustaci|gelat|orxat|pizz|cerve)/i;
+// HARD RULE: a terrace always belongs to a food/drink venue, so ONLY these
+// activities qualify; anything else is never shown as a terrace name. Tested
+// against the de-accented activity string in the match loop below. Widened
+// beyond the obvious bar/restaurant/cafè to the Catalan venue types the census
+// uses — pastisseria, forn/fleca (bakery), granja (milk-bar café), xocolateria,
+// xurreria, creperia, braseria, hamburgueseria, frankfurt, vermuteria, etc.
+const FOOD_DRINK_RE =
+  /\b(bars?|restaurant|cibercaf|cafeteri|cafe|menjar|tapes|degustaci|gelat|orxat|pizz|cerve|pastis|fleca|forn|granja|xocolat|xurr|creperi|braseri|hamburgues|entrepa|frankfurt|vermut|marisqueri|tavern|cocteleri|gintoni)/i;
 
 // Street-type words + articles to ignore when comparing streets, so the
 // open-data abbreviations ("AV.", "PG.", "G.V.") match the census's names.
@@ -91,12 +101,25 @@ type CensusRecord = {
   Longitud?: string;
 };
 
+/** A food/drink match for a terrace from the city census. Food/drink ONLY —
+ *  non-food premises are never returned, so a name from here is always safe to
+ *  show. Both fields are title-cased and ready to display. */
+export type CensusFoodMatch = {
+  /** Food/drink venue at the terrace's exact address (street + house number). */
+  addressFood: string | null;
+  /** Nearest food/drink premise in the search box, with its distance in metres.
+   *  The matcher decides whether it's close enough to use (see terrace-name.ts). */
+  nearestFood: { name: string; distM: number } | null;
+};
+
 /**
- * Business name for a terrace, from the commercial census. Matches by ADDRESS
- * (street + house number) near the terrace, preferring food/drink premises.
- * Returns null if nothing suitable → callers fall back to the street address.
+ * Food/drink candidates for a terrace from the commercial census, matched by
+ * ADDRESS (street + house number) near the terrace point. Returns food/drink
+ * premises ONLY — never a non-food shop, even if one sits at the exact address.
+ * An empty match (both fields null) → the matcher falls through to OpenStreetMap
+ * and then to the street address.
  */
-export async function fetchBusinessName(lat: number, lng: number, terraceAddress: string): Promise<string | null> {
+export async function fetchCensusFood(lat: number, lng: number, terraceAddress: string): Promise<CensusFoodMatch> {
   // ~30 m bounding box around the terrace coordinate.
   const dLat = 30 / 111_000;
   const dLng = 30 / (111_000 * Math.cos((lat * Math.PI) / 180));
@@ -109,36 +132,36 @@ export async function fetchBusinessName(lat: number, lng: number, terraceAddress
   const res = await fetch(`${SQL_ENDPOINT}?sql=${encodeURIComponent(sql)}`);
   if (!res.ok) throw new Error(`Census API responded ${res.status}`);
   const json = await res.json();
-  if (!json?.success) return null;
+  if (!json?.success) return { addressFood: null, nearestFood: null };
   const records: CensusRecord[] = json.result?.records ?? [];
 
   const target = parseAddress(terraceAddress);
 
   let addrFood: { name: string; dist: number } | null = null; // food/drink at the exact address
-  let addrAny: { name: string; dist: number } | null = null; // any business at the exact address
   let nearFood: { name: string; dist: number } | null = null; // nearest food/drink in the box
 
   for (const r of records) {
     const nom = (r.Nom_Local ?? "").trim();
     if (!nom || nom.toUpperCase() === "SN") continue; // "SN" = vacant unit
 
+    // HARD food/drink rule: a non-food premise is never a candidate, even at the
+    // terrace's exact address. This is what stops nail salons, phone shops, etc.
+    // being shown as the terrace name.
+    if (!FOOD_DRINK_RE.test(deburr(r.Nom_Activitat ?? ""))) continue;
+
     const rLat = parseFloat(String(r.Latitud));
     const rLng = parseFloat(String(r.Longitud));
     const dist = Number.isFinite(rLat) && Number.isFinite(rLng) ? haversineM(lat, lng, rLat, rLng) : Infinity;
 
-    const isFood = FOOD_DRINK_RE.test(r.Nom_Activitat ?? "");
     const streetMatch = tokenSim(target.tokens, streetTokens(r.Nom_Via ?? "")) >= 0.5;
     const numberMatch = !!target.number && numberInRange(target.number, r.Num_Policia_Inicial ?? "", r.Num_Policia_Final ?? "");
 
-    if (streetMatch && numberMatch) {
-      if (isFood && (!addrFood || dist < addrFood.dist)) addrFood = { name: nom, dist };
-      if (!addrAny || dist < addrAny.dist) addrAny = { name: nom, dist };
-    }
-    if (isFood && (!nearFood || dist < nearFood.dist)) nearFood = { name: nom, dist };
+    if (streetMatch && numberMatch && (!addrFood || dist < addrFood.dist)) addrFood = { name: nom, dist };
+    if (!nearFood || dist < nearFood.dist) nearFood = { name: nom, dist };
   }
 
-  // Prefer a food/drink business at the exact address; then any business at
-  // that address; then the nearest food/drink premise if it's very close.
-  const pick = addrFood ?? addrAny ?? (nearFood && nearFood.dist <= 25 ? nearFood : null);
-  return pick ? titleCase(pick.name) : null;
+  return {
+    addressFood: addrFood ? titleCase(addrFood.name) : null,
+    nearestFood: nearFood ? { name: titleCase(nearFood.name), distM: nearFood.dist } : null,
+  };
 }
