@@ -7,7 +7,8 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { fetchTerraces, terracesToGeoJSON, readPersistedTerraces, TERRACES_DATA_VERSION, TERRACES_BACKSTOP_MS, type Terrace, type TerraceState } from "@/lib/terraces";
 import { getSunPosition, getNextSunriseISO } from "@/lib/sun";
 import { fetchBuildings, type BBox, type BuildingFeature } from "@/lib/overpass";
-import { fetchBusinessName } from "@/lib/census";
+import { resolveTerraceName } from "@/lib/terrace-name";
+import { OSM_ATTRIBUTION } from "@/lib/osm-names";
 import type { ShadeResult, DurationResult } from "@/lib/shadow";
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -176,15 +177,16 @@ export function MapView({ when, onEdit }: Props) {
   });
   const terraces = terracesQuery.data ?? EMPTY_TERRACES;
 
-  /* ═══ [BUSINESS NAME] — Barcelona commercial census ════════════════════
-   * On selection, look up the business at the terrace's address in the city's
-   * ground-floor commercial census (`Nom_Local`) — see src/lib/census.ts.
-   * Matches by address near the terrace, prefers food/drink. 100% open data,
-   * no OSM. Cached per terrace; null → fall back to the address.
+  /* ═══ [BUSINESS NAME] — census + OpenStreetMap, food/drink only ═════════
+   * On selection, resolve the terrace's name via the combined matcher
+   * (src/lib/terrace-name.ts): a census food/drink venue at the address, else
+   * the nearest OSM food/drink venue (~25 m, offline/baked), else the nearest
+   * census food/drink premise (~25 m). Food/drink ONLY — never a non-food shop.
+   * Cached per terrace; null → fall back to the clean street address.
    * ──────────────────────────────────────────────────────────────────── */
   const nameQuery = useQuery({
     queryKey: ["businessName", selected?.id ?? "none"],
-    queryFn: () => fetchBusinessName(selected!.lat, selected!.lng, selected!.name),
+    queryFn: () => resolveTerraceName(selected!.lat, selected!.lng, selected!.name),
     enabled: !!selected,
     staleTime: Infinity,
     retry: 1,
@@ -408,9 +410,18 @@ export function MapView({ when, onEdit }: Props) {
         style: MAP_STYLE,
         center: [BCN.lng, BCN.lat],
         zoom: DEFAULT_ZOOM,
-        attributionControl: true, // keep Mapbox/OSM attribution (required by TOS)
+        // We add the AttributionControl explicitly below (so we can append our own
+        // OSM credit); disable the default one here to avoid a duplicate control.
+        attributionControl: false,
       });
       mapRef.current = map;
+
+      // Attribution (required). The Mapbox basemap control already credits Mapbox
+      // & OSM for the tiles, but we ALSO use OpenStreetMap data directly — building
+      // footprints for the shadow engine (src/lib/overpass.ts) and food/drink venue
+      // names (src/lib/osm-names.ts) — so we add an explicit "© OpenStreetMap
+      // contributors" credit to stay compliant with the OSM/ODbL licence.
+      map.addControl(new mapboxgl.AttributionControl({ customAttribution: OSM_ATTRIBUTION }));
 
       // Gestures: scroll-wheel zoom (desktop) + pinch-to-zoom (mobile) — Step 6.
       map.scrollZoom.enable();
@@ -567,9 +578,10 @@ export function MapView({ when, onEdit }: Props) {
   /* ═══ [UI CHROME] — preserved from the original design ═════════════════ */
 
   const sel = selected;
-  // OSM business name for the open card (null while loading or if none nearby).
-  const osmName = sel && nameQuery.data ? nameQuery.data : null;
-  const popupSubtitle = sel ? (osmName ? [sel.name, sel.address].filter(Boolean).join(" · ") : sel.address) : "";
+  // Resolved food/drink business name for the open card (null while loading or if
+  // none is confidently nearby → we show the clean street address instead).
+  const businessName = sel && nameQuery.data ? nameQuery.data.name : null;
+  const popupSubtitle = sel ? (businessName ? [sel.name, sel.address].filter(Boolean).join(" · ") : sel.address) : "";
   // Live state for the open card — reflects the CURRENT time + shadow results,
   // not the state captured when it was clicked (Step 5 polish).
   const selState: TerraceState | null = sel ? (sun.isNight ? "night" : (shadeStates[sel.id] ?? "unknown")) : null;
@@ -792,8 +804,8 @@ export function MapView({ when, onEdit }: Props) {
             {durationText && (
               <p className="mt-1.5 text-xs text-muted-foreground">{durationText}</p>
             )}
-            {/* Heading: OSM business name if found, otherwise the street address */}
-            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{osmName ?? sel.name}</h2>
+            {/* Heading: matched food/drink business name if found, else the street address */}
+            <h2 className="mt-3 font-display text-2xl font-bold leading-tight">{businessName ?? sel.name}</h2>
             {popupSubtitle && <p className="mt-1 text-sm text-muted-foreground">{popupSubtitle}</p>}
             {/* ¿Cómo llegar? — open Google Maps at the terrace's exact GPS
                 coordinates (most accurate; Maps drops a pin + offers directions). */}
