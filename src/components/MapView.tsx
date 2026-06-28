@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Clock, Pencil, X, ExternalLink, Sun, TreePine, Moon, Plus, Minus, LocateFixed, Loader2, AlertTriangle, RotateCw } from "lucide-react";
 import type { Map as MapboxMap, Marker as MapboxMarker, GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { fetchTerraces, terracesToGeoJSON, readPersistedTerraces, TERRACES_DATA_VERSION, TERRACES_BACKSTOP_MS, type Terrace, type TerraceState } from "@/lib/terraces";
+import { fetchTerraces, terracesToGeoJSON, readPersistedTerraces, isCompatibleTerracesVersion, TERRACES_DATA_VERSION, TERRACES_BACKSTOP_MS, type Terrace, type TerraceState } from "@/lib/terraces";
 import { getSunPosition, getNextSunriseISO } from "@/lib/sun";
 import { fetchBuildings, type BBox, type BuildingFeature } from "@/lib/overpass";
 import { resolveTerraceName } from "@/lib/terrace-name";
@@ -157,14 +157,15 @@ export function MapView({ when, onEdit }: Props) {
   /* ═══ [TERRACE DATA] ═══════════════════════════════════════════════════
    * Fetch the real terraces once (cached by React Query). See lib/terraces.ts.
    * ──────────────────────────────────────────────────────────────────── */
-  // Seed from localStorage, but only if it's the SAME dataset edition we're built
-  // against (version match) — a cache from an older edition is ignored so it can't
-  // pin stale data. While the version matches, repeat visits paint instantly and
-  // skip the network entirely; the version is also in the query key, so a new
-  // edition becomes a fresh query → refetch. Read once on mount.
+  // Seed from localStorage if it's the same Terrace SHAPE as this build (see
+  // isCompatibleTerracesVersion) — NOT an exact edition match, so repeat visits paint
+  // instantly even right after a republish (the discovered edition then streams in via
+  // the query and re-persists under its own version). While the data is still fresh
+  // (TERRACES_BACKSTOP_MS) repeat visits skip the network entirely; a Terrace-shape
+  // change is in the query key, so it becomes a fresh query → refetch. Read once on mount.
   const persistedTerraces = useMemo(() => {
     const p = readPersistedTerraces();
-    return p && p.version === TERRACES_DATA_VERSION ? p : null;
+    return p && isCompatibleTerracesVersion(p.version) ? p : null;
   }, []);
   const terracesQuery = useQuery({
     queryKey: ["terraces", TERRACES_DATA_VERSION],
